@@ -908,6 +908,9 @@ process h fn ColourOn
 process h fn ColourOff
                      = do ist <- getIState
                           putIState $ ist { idris_colourRepl = False }
+process h fn DumpCtx
+                   = do ctx <- getContext
+                        ihPrintResult h $ show ctx
 
 classInfo :: ClassInfo -> Idris ()
 classInfo ci = do iputStrLn "Methods:\n"

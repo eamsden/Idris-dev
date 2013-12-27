@@ -257,6 +257,7 @@ data Command = Quit
              | SetColour ColourType IdrisColour
              | ColourOn
              | ColourOff
+             | DumpCtx
 
 data Opt = Filename String
          | Ver
