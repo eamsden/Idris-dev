@@ -65,6 +65,7 @@ import Control.Concurrent.MVar
 import Network
 import Control.Concurrent
 import Data.Maybe
+import qualified Data.Map as M
 import Data.List
 import Data.Char
 import Data.Version
@@ -911,6 +912,10 @@ process h fn ColourOff
 process h fn DumpCtx
                    = do ctx <- getContext
                         ihPrintResult h $ show ctx
+
+process h fn DumpTLNames
+                       = do ctx <- getContext
+                            mapM_ (ihPrintResult h . show . fst) $ M.toList $ definitions ctx
 
 classInfo :: ClassInfo -> Idris ()
 classInfo ci = do iputStrLn "Methods:\n"

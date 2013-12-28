@@ -258,6 +258,7 @@ data Command = Quit
              | ColourOn
              | ColourOff
              | DumpCtx
+             | DumpTLNames
 
 data Opt = Filename String
          | Ver
