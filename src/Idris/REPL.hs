@@ -832,7 +832,25 @@ process h fn (Describe n')
               [(n, (_,_,False))] -> return n
               [(_, (_,_,True))]  -> ierror (Msg $ "Declarations not solvable using prover")
               ns -> ierror (CantResolveAlts (map show ns))
-         describer n
+         vars <- describer n
+         mapM_ (iPrintResult . show) vars
+
+process h fn (InScope n')
+    = do ctxt <- getContext
+         ist <- getIState
+         let ns = lookupNames n' ctxt
+         let metavars = mapMaybe (\n -> do c <- lookup n (idris_metavars ist); return (n, c)) ns
+         n <- case metavars of
+              [] -> ierror (Msg $ "Cannot find metavariable " ++ show n')
+              [(n, (_,_,False))] -> return n
+              [(_, (_,_,True))]  -> ierror (Msg $ "Declarations not solvable using prover")
+              ns -> ierror (CantResolveAlts (map show ns))
+         vars <- describer n
+         let tlvars = map fst $ M.toList $ definitions ctxt
+         let uservars = mapMaybe (\n -> case n of
+                                          UN _ -> Just n
+                                          _ -> Nothing) (tlvars ++ vars)
+         mapM_ (iPrintResult . show) uservars
 
 process h fn (HNF t)
                     = do (tm, ty) <- elabVal toplevel False t

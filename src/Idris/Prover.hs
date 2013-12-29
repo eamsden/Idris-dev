@@ -35,7 +35,7 @@ prover lit x =
                                else ifail $ show x ++ " is not a metavariable"
                   _ -> fail "No such metavariable"
 
-describer :: Name -> Idris ()
+describer :: Name -> Idris [Name] 
 describer x = do ctxt <- getContext
                  i <- getIState
                  case lookupTy x ctxt of
@@ -63,13 +63,9 @@ assumptionNames e
         names ((MN _ _, _) : bs) = names bs
         names ((n, _) : bs) = show n : names bs
 
-describe :: Context -> Name -> Type -> Idris ()
+describe :: Context -> Name -> Type -> Idris [Name] 
 describe ctxt n ty = do let ps = initElaborator n ctxt ty
-                        ideslavePutSExp "start-describe" n
-                        vars <- describeE (ES (ps, []) "" Nothing)
-                        ideslavePutSExp "describe-vars" vars
-                        ideslavePutSExp "end-describe" n
-
+                        describeE (ES (ps, []) "" Nothing)
 
 prove :: Context -> Bool -> Name -> Type -> Idris ()
 prove ctxt lit n ty
@@ -174,9 +170,6 @@ describeE e
            (do (_, st) <- elabStep e (runTac True i Intros); return st)
            (\err -> do iPrintError (pshow i err); return e)
          let OK env = envAtFocus $ proof st
-         case idris_outputmode i of
-           RawOutput -> mapM_ (iputStrLn . show . fst) env
-           IdeSlave _ -> return ()
          return $ map fst env 
 
 ploop :: Bool -> String -> [String] -> ElabState [PDecl] -> Maybe History -> Idris (Term, [String])

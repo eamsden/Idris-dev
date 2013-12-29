@@ -90,6 +90,7 @@ pCmd = do P.whiteSpace; try (do cmd ["q", "quit"]; eof; return Quit)
                           hints <- many P.name
                           return (DoProofSearch upd (fromInteger l) n hints))
               <|> try (do cmd ["p", "prove"]; n <- P.name; eof; return (Prove n))
+              <|> try (do cmd ["is", "inscope"]; n <- P.name; eof; return (InScope n))
               <|> try (do cmd ["ds", "describe"]; n <- P.name; eof; return (Describe n))
               <|> try (do cmd ["m", "metavars"]; eof; return Metavars)
               <|> try (do cmd ["a", "addproof"]; do n <- option Nothing (do x <- P.name;

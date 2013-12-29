@@ -260,6 +260,7 @@ data Command = Quit
              | ColourOff
              | DumpCtx
              | DumpTLNames
+             | InScope Name
 
 data Opt = Filename String
          | Ver
