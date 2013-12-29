@@ -822,6 +822,18 @@ process h fn (Prove n')
           mapM_ (\ (f,n) -> setTotality n Unchecked) (idris_totcheck i)
           mapM_ checkDeclTotality (idris_totcheck i)
 
+process h fn (Describe n')
+    = do ctxt <- getContext
+         ist <- getIState
+         let ns = lookupNames n' ctxt
+         let metavars = mapMaybe (\n -> do c <- lookup n (idris_metavars ist); return (n, c)) ns
+         n <- case metavars of
+              [] -> ierror (Msg $ "Cannot find metavariable " ++ show n')
+              [(n, (_,_,False))] -> return n
+              [(_, (_,_,True))]  -> ierror (Msg $ "Declarations not solvable using prover")
+              ns -> ierror (CantResolveAlts (map show ns))
+         describer n
+
 process h fn (HNF t)
                     = do (tm, ty) <- elabVal toplevel False t
                          ctxt <- getContext

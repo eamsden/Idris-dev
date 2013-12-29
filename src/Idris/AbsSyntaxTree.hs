@@ -228,6 +228,7 @@ data Command = Quit
              | ExecVal PTerm
              | Metavars
              | Prove Name
+             | Describe Name
              | AddProof (Maybe Name)
              | RmProof Name
              | ShowProof Name

@@ -35,6 +35,15 @@ prover lit x =
                                else ifail $ show x ++ " is not a metavariable"
                   _ -> fail "No such metavariable"
 
+describer :: Name -> Idris ()
+describer x = do ctxt <- getContext
+                 i <- getIState
+                 case lookupTy x ctxt of
+                   [t] -> if elem x (map fst (idris_metavars i))
+                                then describe ctxt x t
+                                else ifail $ show x ++ " is not a metavariable"
+                   _ -> fail "No such metavariable"
+
 showProof :: Bool -> Name -> [String] -> String
 showProof lit n ps
     = bird ++ show n ++ " = proof" ++ break ++
@@ -53,6 +62,14 @@ assumptionNames e
   where names [] = []
         names ((MN _ _, _) : bs) = names bs
         names ((n, _) : bs) = show n : names bs
+
+describe :: Context -> Name -> Type -> Idris ()
+describe ctxt n ty = do let ps = initElaborator n ctxt ty
+                        ideslavePutSExp "start-describe" n
+                        vars <- describeE (ES (ps, []) "" Nothing)
+                        ideslavePutSExp "describe-vars" vars
+                        ideslavePutSExp "end-describe" n
+
 
 prove :: Context -> Bool -> Name -> Type -> Idris ()
 prove ctxt lit n ty
@@ -149,6 +166,18 @@ receiveInput e =
             receiveInput e
        Just (Interpret cmd) -> return (Just cmd)
        Nothing -> return Nothing
+
+describeE :: ElabState [PDecl] -> Idris [Name]
+describeE e
+    = do i <- getIState
+         st <- idrisCatch
+           (do (_, st) <- elabStep e (runTac True i Intros); return st)
+           (\err -> do iPrintError (pshow i err); return e)
+         let OK env = envAtFocus $ proof st
+         case idris_outputmode i of
+           RawOutput -> mapM_ (iputStrLn . show . fst) env
+           IdeSlave _ -> return ()
+         return $ map fst env 
 
 ploop :: Bool -> String -> [String] -> ElabState [PDecl] -> Maybe History -> Idris (Term, [String])
 ploop d prompt prf e h
