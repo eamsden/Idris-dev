@@ -835,6 +835,19 @@ process h fn (Describe n')
          vars <- describer n
          mapM_ (iPrintResult . show) vars
 
+process h fn (TestRefine mv x)
+    = do ctxt <- getContext
+         ist <- getIState
+         let ns = lookupNames mv ctxt
+         let metavars = mapMaybe (\n -> do c <- lookup n (idris_metavars ist); return (n, c)) ns
+         n <- case metavars of
+              [] -> ierror (Msg $ "Cannot find metavariable " ++ show mv)
+              [(n, (_,_,False))] -> return n
+              [(_, (_,_,True))]  -> ierror (Msg $ "Declarations not solvable using prover")
+              ns -> ierror (CantResolveAlts (map show ns))
+         mparams <- tyFilterer n x 
+         iPrintResult $ show mparams
+
 process h fn (InScope n')
     = do ctxt <- getContext
          ist <- getIState

@@ -44,6 +44,15 @@ describer x = do ctxt <- getContext
                                 else ifail $ show x ++ " is not a metavariable"
                    _ -> fail "No such metavariable"
 
+tyFilterer :: Name -> Name -> Idris (Maybe Int)
+tyFilterer mv x = do ctxt <- getContext
+                     i <- getIState
+                     case lookupTy mv ctxt of
+                       [t] -> if elem mv (map fst (idris_metavars i))
+                                    then tyFilter ctxt mv x t
+                                    else ifail $ show mv ++ " is not a metavariable"
+                       _ -> fail "No such metavariable"
+
 showProof :: Bool -> Name -> [String] -> String
 showProof lit n ps
     = bird ++ show n ++ " = proof" ++ break ++
@@ -66,6 +75,10 @@ assumptionNames e
 describe :: Context -> Name -> Type -> Idris [Name] 
 describe ctxt n ty = do let ps = initElaborator n ctxt ty
                         describeE (ES (ps, []) "" Nothing)
+
+tyFilter :: Context -> Name -> Name -> Type -> Idris (Maybe Int)
+tyFilter ctxt mv x ty = do let ps = initElaborator mv ctxt ty
+                           tyFilterE x (ES (ps, []) "" Nothing)
 
 prove :: Context -> Bool -> Name -> Type -> Idris ()
 prove ctxt lit n ty
@@ -171,6 +184,14 @@ describeE e
            (\err -> do iPrintError (pshow i err); return e)
          let OK env = envAtFocus $ proof st
          return $ map fst env 
+
+tyFilterE :: Name -> ElabState [PDecl] -> Idris (Maybe Int)
+tyFilterE x e
+    = do i <- getIState
+         st <- idrisCatch
+           (do (_, st) <- elabStep e (do runTac True i Intros; runTac True i (Refine x [])); return $ Just st)
+           (\err -> return Nothing)
+         return $ fmap (length . holes . proof) st
 
 ploop :: Bool -> String -> [String] -> ElabState [PDecl] -> Maybe History -> Idris (Term, [String])
 ploop d prompt prf e h

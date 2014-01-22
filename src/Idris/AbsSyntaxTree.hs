@@ -229,6 +229,7 @@ data Command = Quit
              | Metavars
              | Prove Name
              | Describe Name
+             | TestRefine Name Name
              | AddProof (Maybe Name)
              | RmProof Name
              | ShowProof Name
