@@ -191,7 +191,9 @@ tyFilterE x e
          st <- idrisCatch
            (do (_, st) <- elabStep e (do runTac True i Intros; runTac True i (Refine x [])); return $ Just st)
            (\err -> return Nothing)
-         return $ fmap (length . holes . proof) st
+         let mNumHoles = fmap (length . holes . proof) st
+         when (fmap odd mNumHoles == Just True) $ iPrintError "Oops: odd number of new goals result from refining a metavariable"
+         return $ fmap (`div` 2) mNumHoles
 
 ploop :: Bool -> String -> [String] -> ElabState [PDecl] -> Maybe History -> Idris (Term, [String])
 ploop d prompt prf e h
