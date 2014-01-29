@@ -92,7 +92,8 @@ pCmd = do P.whiteSpace; try (do cmd ["q", "quit"]; eof; return Quit)
               <|> try (do cmd ["p", "prove"]; n <- P.name; eof; return (Prove n))
               <|> try (do cmd ["is", "inscope"]; n <- P.name; eof; return (InScope n))
               <|> try (do cmd ["ds", "describe"]; n <- P.name; eof; return (Describe n))
-              <|> try (do cmd ["rs", "refines"]; mv <- P.name; x <- P.name; eof; return (TestRefine mv x))
+              <|> try (do cmd ["rs", "testrefine"]; mv <- P.name; x <- P.name; eof; return (TestRefine mv x))
+              <|> try (do cmd ["f", "fits"]; mv <- P.name; eof; return (TestRefines mv))
               <|> try (do cmd ["m", "metavars"]; eof; return Metavars)
               <|> try (do cmd ["a", "addproof"]; do n <- option Nothing (do x <- P.name;
                                                                             return (Just x))
@@ -101,6 +102,7 @@ pCmd = do P.whiteSpace; try (do cmd ["q", "quit"]; eof; return Quit)
               <|> try (do cmd ["patt"]; P.whiteSpace; t <- P.fullExpr defaultSyntax; return (Pattelab t))
               <|> try (do cmd ["dc", "dumpctx"]; eof; return DumpCtx)
               <|> try (do cmd ["dn", "dumptlnames"]; eof; return DumpTLNames)
+              <|> try (do cmd ["uq", "uniques"]; nm <- P.identifier; n <- P.natural; return $ Uniques nm n)
               <|> do P.whiteSpace; do eof; return NOP
                              <|> do t <- P.fullExpr defaultSyntax; return (Eval t)
 

@@ -230,6 +230,7 @@ data Command = Quit
              | Prove Name
              | Describe Name
              | TestRefine Name Name
+             | TestRefines Name
              | AddProof (Maybe Name)
              | RmProof Name
              | ShowProof Name
@@ -262,6 +263,7 @@ data Command = Quit
              | DumpCtx
              | DumpTLNames
              | InScope Name
+             | Uniques String Integer
 
 data Opt = Filename String
          | Ver

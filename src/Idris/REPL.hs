@@ -308,6 +308,9 @@ ideslaveProcess fn (AddClauseFrom False pos str) = process stdout fn (AddClauseF
 ideslaveProcess fn (AddMissing False pos str) = process stdout fn (AddMissing False pos str)
 ideslaveProcess fn (MakeWith False pos str) = process stdout fn (MakeWith False pos str)
 ideslaveProcess fn (DoProofSearch False pos str xs) = process stdout fn (DoProofSearch False pos str xs)
+ideslaveProcess fn (TestRefines mv) = do process stdout fn (TestRefines mv) 
+                                         iPrintResult ""
+ideslaveProcess fn (Uniques nm n) = process stdout fn (Uniques nm n)
 ideslaveProcess fn _ = iPrintError "command not recognized or not supported"
 
 
@@ -848,6 +851,27 @@ process h fn (TestRefine mv x)
          mparams <- tyFilterer n x 
          iPrintResult $ show mparams
 
+process h fn (TestRefines mv)
+    = do ctxt <- getContext
+         ist <- getIState
+         let ns = lookupNames mv ctxt
+         let metavars = mapMaybe (\n -> do c <- lookup n (idris_metavars ist); return (n, c)) ns
+         n <- case metavars of
+              [] -> ierror (Msg $ "Cannot find metavariable " ++ show mv)
+              [(n, (_,_,False))] -> return n
+              [(_, (_,_,True))]  -> ierror (Msg $ "Declarations not solvable using prover")
+              ns -> ierror (CantResolveAlts (map show ns))
+         vars <- describer n
+         let tlvars = map fst $ M.toList $ definitions ctxt
+         let uservars = mapMaybe (\n -> case n of
+                                          UN _ -> Just n
+                                          _ -> Nothing) (tlvars ++ vars)
+         refines <- fmap (mapMaybe id) $ forM uservars
+           (\var -> do
+                       mRefine <- tyFilterer n var
+                       return $ fmap (\i -> (var, i)) mRefine)
+         mapM_ (\(v, i) -> iPrintResult $ show v ++ "\t" ++ show i) refines
+
 process h fn (InScope n')
     = do ctxt <- getContext
          ist <- getIState
@@ -959,6 +983,13 @@ process h fn DumpCtx
 process h fn DumpTLNames
                        = do ctx <- getContext
                             mapM_ (ihPrintResult h . show . fst) $ M.toList $ definitions ctx
+process h fn (Uniques nm n) = do
+  nms <- getUniqs n nm 0
+  mapM_ (ihPrintResult h) nms
+  where getUniqs 0 _ _ = return []
+        getUniqs n nm i = do (nm',i') <- getUniq nm i
+                             nms <- getUniqs (n - 1) nm i'
+                             return $ nm':nms
 
 classInfo :: ClassInfo -> Idris ()
 classInfo ci = do iputStrLn "Methods:\n"

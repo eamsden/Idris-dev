@@ -22,6 +22,8 @@ import System.Console.Haskeline
 import System.Console.Haskeline.History
 import Control.Monad.State
 
+import Data.List
+
 import Util.Pretty
 import Debug.Trace
 
@@ -191,9 +193,14 @@ tyFilterE x e
          st <- idrisCatch
            (do (_, st) <- elabStep e (do runTac True i Intros; runTac True i (Refine x [])); return $ Just st)
            (\err -> return Nothing)
-         let mNumHoles = fmap (length . holes . proof) st
-         when (fmap odd mNumHoles == Just True) $ iPrintError "Oops: odd number of new goals result from refining a metavariable"
-         return $ fmap (`div` 2) mNumHoles
+         case st of
+           Nothing -> return Nothing
+           Just st -> do
+                         iPrintResult $ show $ instances $ proof st
+                         let unfilled   = holes $ proof st
+                             nonunified = dontunify $ proof st
+                             tcs = instances $ proof st
+                         return $ Just $ length $ (intersect unfilled nonunified \\ tcs)
 
 ploop :: Bool -> String -> [String] -> ElabState [PDecl] -> Maybe History -> Idris (Term, [String])
 ploop d prompt prf e h
