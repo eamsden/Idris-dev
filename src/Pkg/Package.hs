@@ -24,13 +24,14 @@ import Pkg.PParser
 
 import Paths_idris (getDataDir)
 
+-- | Run the package through the idris compiler.
+-- 
 -- To build a package:
 -- * read the package description
 -- * check all the library dependencies exist
 -- * invoke the makefile if there is one
 -- * invoke idris on each module, with idris_opts
 -- * install everything into datadir/pname, if install flag is set
-
 buildPkg :: Bool -> (Bool, FilePath) -> IO ()
 buildPkg warnonly (install, fp)
      = do pkgdesc <- parseDesc fp
@@ -39,7 +40,7 @@ buildPkg warnonly (install, fp)
             do dir <- getCurrentDirectory
                setCurrentDirectory $ dir </> sourcedir pkgdesc
                make (makefile pkgdesc)
-               case (execout pkgdesc) of
+               m_ist <- case (execout pkgdesc) of
                    Nothing -> buildMods (NoREPL : Verbose : idris_opts pkgdesc)
                                     (modules pkgdesc)
                    Just o -> do let exec = dir </> o
@@ -47,9 +48,49 @@ buildPkg warnonly (install, fp)
                                     (NoREPL : Verbose : Output exec : idris_opts pkgdesc)
                                     [idris_main pkgdesc]
                setCurrentDirectory dir
-               when install $ installPkg pkgdesc
+               case m_ist of
+                    Nothing -> exitWith (ExitFailure 1)
+                    Just ist -> do
+                       -- Quit with error code if there was a problem
+                       case errLine ist of
+                            Just _ -> exitWith (ExitFailure 1)
+                            _ -> return ()
+                       -- Also give up if there are metavariables to solve
+                       case (map fst (idris_metavars ist) \\ primDefs) of
+                            [] -> when install $ installPkg pkgdesc
+                            ms -> do if install 
+                                        then putStrLn "Can't install: there are undefined metavariables:"
+                                        else putStrLn "There are undefined metavariables:"
+                                     putStrLn $ "\t" ++ show ms 
+                                     exitWith (ExitFailure 1)
 
-cleanPkg :: FilePath -> IO ()
+-- | Type check packages only
+--
+-- This differs from build in that executables are not built, if the
+-- package contains an executable.
+checkPkg :: Bool         -- ^ Show Warnings
+            -> FilePath  -- ^ Path to ipkg file.
+            -> IO ()
+checkPkg warnonly fpath
+  = do pkgdesc <-parseDesc fpath
+       ok <- mapM (testLib warnonly (pkgname pkgdesc)) (libdeps pkgdesc)
+       when (and ok) $
+         do dir <- getCurrentDirectory
+            setCurrentDirectory $ dir </> sourcedir pkgdesc
+            make (makefile pkgdesc)
+            res <- buildMods (NoREPL : Verbose : idris_opts pkgdesc)
+                             (modules pkgdesc)
+            setCurrentDirectory dir
+            case res of
+              Nothing -> exitWith (ExitFailure 1)
+              Just res' -> do
+                case errLine res' of
+                  Just _ -> exitWith (ExitFailure 1)
+                  _ -> return ()
+
+-- | Clean Package build files
+cleanPkg :: FilePath -- ^ Path to ipkg file.
+         -> IO ()
 cleanPkg fp
      = do pkgdesc <- parseDesc fp
           dir <- getCurrentDirectory
@@ -60,6 +101,7 @@ cleanPkg fp
                Nothing -> return ()
                Just s -> rmFile $ dir </> s
 
+-- | Install package
 installPkg :: PkgDesc -> IO ()
 installPkg pkgdesc
      = do dir <- getCurrentDirectory
@@ -69,11 +111,15 @@ installPkg pkgdesc
               Just o -> return () -- do nothing, keep executable locally, for noe
           mapM_ (installObj (pkgname pkgdesc)) (objs pkgdesc)
 
-buildMods :: [Opt] -> [Name] -> IO ()
+
+-- ---------------------------------------------------------- [ Helper Methods ]
+-- Methods for building, testing, installing, and removal of idris
+-- packages.
+
+buildMods :: [Opt] -> [Name] -> IO (Maybe IState)
 buildMods opts ns = do let f = map (toPath . showCG) ns
 --                        putStrLn $ "MODULE: " ++ show f
                        idris (map Filename f ++ opts)
-                       return ()
     where toPath n = foldl1' (</>) $ splitOn "." n
 
 testLib :: Bool -> String -> String -> IO Bool
@@ -95,8 +141,8 @@ testLib warn p f
 rmIBC :: Name -> IO ()
 rmIBC m = rmFile $ toIBCFile m
 
-toIBCFile (UN n) = n ++ ".ibc"
-toIBCFile (NS n ns) = foldl1' (</>) (reverse (toIBCFile n : ns))
+toIBCFile (UN n) = str n ++ ".ibc"
+toIBCFile (NS n ns) = foldl1' (</>) (reverse (toIBCFile n : map str ns))
 
 installIBC :: String -> Name -> IO ()
 installIBC p m = do let f = toIBCFile m
@@ -107,7 +153,8 @@ installIBC p m = do let f = toIBCFile m
                     copyFile f (destdir </> takeFileName f)
                     return ()
     where getDest (UN n) = ""
-          getDest (NS n ns) = foldl1' (</>) (reverse (getDest n : ns))
+          getDest (NS n ns) = foldl1' (</>) (reverse (getDest n : map str ns))
+
 
 installObj :: String -> String -> IO ()
 installObj p o = do d <- getTargetDir
@@ -123,12 +170,17 @@ mkDirCmd = "mkdir "
 mkDirCmd = "mkdir -p "
 #endif
 
+-- ------------------------------------------------------- [ Makefile Commands ]
+-- | Invoke a Makefile's default target.
 make :: Maybe String -> IO ()
 make Nothing = return ()
 make (Just s) = do system $ "make -f " ++ s
                    return ()
 
+-- | Invoke a Makefile's clean target.
 clean :: Maybe String -> IO ()
 clean Nothing = return ()
 clean (Just s) = do system $ "make -f " ++ s ++ " clean"
                     return ()
+
+-- --------------------------------------------------------------------- [ EOF ]

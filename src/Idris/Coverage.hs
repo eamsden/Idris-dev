@@ -15,7 +15,7 @@ import Data.Either
 import Data.Maybe
 import Debug.Trace
 
-import Control.Monad.State
+import Control.Monad.State.Strict
 
 mkPatTm :: PTerm -> Idris Term
 mkPatTm t = do i <- getIState
@@ -31,7 +31,7 @@ mkPatTm t = do i <- getIState
                               return $ mkApp t' args'
     toTT _ = do v <- get
                 put (v + 1)
-                return (P Bound (MN v "imp") Erased)
+                return (P Bound (sMN v "imp") Erased)
 
 -- Given a list of LHSs, generate a extra clauses which cover the remaining
 -- cases. The ones which haven't been provided are marked 'absurd' so that the
@@ -50,20 +50,20 @@ genClauses fc n xs given
         logLvl 5 $ show (map length argss) ++ "\n" ++ show (map length all_args)
         logLvl 10 $ show argss ++ "\n" ++ show all_args
         logLvl 10 $ "Original: \n" ++
-             showSep "\n" (map (\t -> showImp Nothing True False (delab' i t True True)) xs)
+             showSep "\n" (map (\t -> showTm i (delab' i t True True)) xs)
         -- add an infinite supply of explicit arguments to update the possible
         -- cases for (the return type may be variadic, or function type, sp
         -- there may be more case splitting that the idris_implicits record
         -- suggests)
         let parg = case lookupCtxt n (idris_implicits i) of
-                        (p : _) -> p ++ repeat (PExp 0 False Placeholder "")
+                        (p : _) -> p ++ repeat (PExp 0 [] Placeholder "")
                         _ -> repeat (pexp Placeholder)
         let tryclauses = mkClauses parg all_args
         logLvl 2 $ show (length tryclauses) ++ " initially to check"
-        logLvl 5 $ showSep "\n" (map (showImp Nothing True False) tryclauses)
+        logLvl 5 $ showSep "\n" (map (showTm i) tryclauses)
         let new = filter (noMatch i) (nub tryclauses)
         logLvl 1 $ show (length new) ++ " clauses to check for impossibility"
-        logLvl 5 $ "New clauses: \n" ++ showSep "\n" (map (showImp Nothing True False) new)
+        logLvl 5 $ "New clauses: \n" ++ showSep "\n" (map (showTm i) new)
 --           ++ " from:\n" ++ showSep "\n" (map (showImp True) tryclauses)
         return new
 --         return (map (\t -> PClause n t [] PImpossible []) new)
@@ -166,13 +166,13 @@ genAll i args
     otherPats o@(PApp _ (PRef fc n) xs) = ops fc n xs o
     otherPats o@(PPair fc l r)
         = ops fc pairCon
-                ([pimp (UN "A") Placeholder True,
-                  pimp (UN "B") Placeholder True] ++
+                ([pimp (sUN "A") Placeholder True,
+                  pimp (sUN "B") Placeholder True] ++
                  [pexp l, pexp r]) o
     otherPats o@(PDPair fc t _ v)
-        = ops fc (UN "Ex_intro")
-                ([pimp (UN "a") Placeholder True,
-                  pimp (UN "P") Placeholder True] ++
+        = ops fc (sUN "Ex_intro")
+                ([pimp (sUN "a") Placeholder True,
+                  pimp (sUN "P") Placeholder True] ++
                  [pexp t,pexp v]) o
     otherPats o@(PConstant c) = return o
     otherPats arg = return Placeholder
@@ -183,7 +183,7 @@ genAll i args
                  let p = resugar (PApp fc (PRef fc n) (zipWith upd xs' xs))
                  let tyn = getTy n (tt_ctxt i)
                  case lookupCtxt tyn (idris_datatypes i) of
-                         (TI ns _ _ : _) -> p : map (mkPat fc) (ns \\ [n])
+                         (TI ns _ _ _ : _) -> p : map (mkPat fc) (ns \\ [n])
                          _ -> [p]
     ops fc n arg o = return Placeholder
 
@@ -191,7 +191,8 @@ genAll i args
     getExpTm t = getTm t
 
     -- put it back to its original form
-    resugar (PApp _ (PRef fc (UN "Ex_intro")) [_,_,t,v])
+    resugar (PApp _ (PRef fc (UN ei)) [_,_,t,v])
+      | ei == txt "Ex_intro"
         = PDPair fc (getTm t) Placeholder (getTm v)
     resugar (PApp _ (PRef fc n) [_,_,l,r])
       | n == pairCon
@@ -258,7 +259,8 @@ calcProd i fc topn pats
 
      prod :: Name -> [Name] -> Bool -> Term -> Idris Bool
      prod n done ok ap@(App _ _)
-        | (P _ (UN "lazy") _, [_, arg]) <- unApply ap = prod n done ok arg
+        | (P _ (UN l) _, [_, arg]) <- unApply ap,
+          l == txt "lazy" = prod n done ok arg
         | (P nt f _, args) <- unApply ap
             = do recOK <- checkProdRec (n:done) f
                  let ctxt = tt_ctxt i
@@ -287,7 +289,7 @@ calcProd i fc topn pats
      cotype (DCon _ _) n ty
         | (P _ t _, _) <- unApply (getRetTy ty)
             = case lookupCtxt t (idris_datatypes i) of
-                   [TI _ True _] -> True
+                   [TI _ True _ _] -> True
                    _ -> False
      cotype nt n ty = False
 
@@ -325,7 +327,7 @@ checkTotality path fc n
         t' <- case t of
                 Unchecked ->
                     case lookupDef n ctxt of
-                        [CaseOp _ _ _ pats _] ->
+                        [CaseOp _ _ _ _ pats _] ->
                             do t' <- if AssertTotal `elem` opts
                                         then return $ Total []
                                         else calcTotality path fc n pats
@@ -370,6 +372,7 @@ checkDeclTotality (fc, n)
     = do logLvl 2 $ "Checking " ++ show n ++ " for totality"
 --          buildSCG (fc, n)
 --          logLvl 2 $ "Built SCG"
+         i <- getIState 
          checkTotality [] fc n
 
 -- Calculate the size change graph for this definition
@@ -388,7 +391,7 @@ buildSCG (_, n) = do
    ist <- getIState
    case lookupCtxt n (idris_callgraph ist) of
        [cg] -> case lookupDef n (tt_ctxt ist) of
-           [CaseOp _ _ pats _ cd] ->
+           [CaseOp _ _ _ pats _ cd] ->
              let (args, sc) = cases_totcheck cd in
                do logLvl 2 $ "Building SCG for " ++ show n ++ " from\n"
                                 ++ show pats ++ "\n" ++ show sc
@@ -404,7 +407,8 @@ buildSCG' ist pats args = nub $ concatMap scgPat pats where
                           findCalls (dePat rhs) (patvars lhs) pargs
 
   findCalls ap@(App f a) pvs pargs
-     | (P _ (UN "lazy") _, [_, arg]) <- unApply ap
+     | (P _ (UN l) _, [_, arg]) <- unApply ap,
+       l == txt "lazy"
         = findCalls arg pvs pargs
      | (P _ n _, args) <- unApply ap
         = mkChange n args pargs ++
@@ -462,7 +466,7 @@ buildSCG' ist pats args = nub $ concatMap scgPat pats where
 
       isInductive (P _ nty _) (P _ nty' _) =
           let co = case lookupCtxt nty (idris_datatypes ist) of
-                        [TI _ x _] -> x
+                        [TI _ x _ _] -> x
                         _ -> False in
               nty == nty' && not co
       isInductive _ _ = False
@@ -503,7 +507,7 @@ buildSCG' ist sc args = -- trace ("Building SCG for " ++ show sc) $
                       [ty] = lookupTy n ctxt -- must exist!
                       P _ nty _ = fst (unApply (getRetTy ty))
                       co = case lookupCtxt nty (idris_datatypes ist) of
-                              [TI _ x _] -> x
+                              [TI _ x _ _] -> x
                               _ -> False
                       args = map snd (getArgTys ty) in
                       map (getRel co nty) (map (fst . unApply . getRetTy) args)

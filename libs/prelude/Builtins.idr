@@ -1,3 +1,5 @@
+%unqualified
+
 %access public
 %default total
 
@@ -11,6 +13,9 @@ getProof : {P : a -> Type} -> (s : Exists a P) -> P (getWitness s)
 getProof (a ** v) = v
 
 FalseElim : _|_ -> a
+
+-- For 'symbol syntax. 'foo becomes Symbol_ "foo"
+data Symbol_ : String -> Type where
 
 -- ------------------------------------------------------ [ For rewrite tactic ]
 replace : {a:_} -> {x:_} -> {y:_} -> {P : a -> Type} -> x = y -> P x -> P y

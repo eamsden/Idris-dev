@@ -103,6 +103,7 @@ pCmd = do P.whiteSpace; try (do cmd ["q", "quit"]; eof; return Quit)
               <|> try (do cmd ["dc", "dumpctx"]; eof; return DumpCtx)
               <|> try (do cmd ["dn", "dumptlnames"]; eof; return DumpTLNames)
               <|> try (do cmd ["uq", "uniques"]; nm <- P.identifier; n <- P.natural; return $ Uniques nm n)
+              <|> try (do cmd ["errorhandlers"]; eof ; return ListErrorHandlers)
               <|> do P.whiteSpace; do eof; return NOP
                              <|> do t <- P.fullExpr defaultSyntax; return (Eval t)
 

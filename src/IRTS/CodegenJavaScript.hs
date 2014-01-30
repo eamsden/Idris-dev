@@ -64,6 +64,7 @@ data JS = JSRaw String
         | JSArray [JS]
         | JSObject [(String, JS)]
         | JSString String
+        | JSChar String
         | JSNum JSNum
         | JSAssign JS JS
         | JSAlloc String (Maybe JS)
@@ -153,6 +154,9 @@ compileJS (JSObject fields) =
 compileJS (JSString str) =
   show str
 
+compileJS (JSChar chr) =
+  chr
+
 compileJS (JSNum num)
   | JSInt i                <- num = show i
   | JSFloat f              <- num = show f
@@ -170,8 +174,16 @@ compileJS (JSIndex lhs rhs) =
   compileJS lhs ++ "[" ++ compileJS rhs ++ "]"
 
 compileJS (JSCond branches) =
-  intercalate " else " $ map createIfBlock branches
+  intercalate " else " $ map createIfBlock (eliminateDeadBranches branches)
   where
+    eliminateDeadBranches (e@(JSTrue, _):_) = [e]
+    eliminateDeadBranches (x:xs)            = x : eliminateDeadBranches xs
+    eliminateDeadBranches []                = []
+
+    createIfBlock (JSTrue, e) =
+         "{\n"
+      ++ "return " ++ compileJS e
+      ++ ";\n}"
     createIfBlock (cond, e) =
          "if (" ++ compileJS cond ++") {\n"
       ++ "return " ++ compileJS e
@@ -233,6 +245,7 @@ jsLet name value body =
     )
   ) [value]
 
+
 jsSubst :: String -> JS -> JS -> JS
 jsSubst var new (JSVar old)
   | var == translateVariableName old = new
@@ -245,23 +258,18 @@ jsSubst var new (JSIdent old)
 jsSubst var new (JSArray fields) =
   JSArray (map (jsSubst var new) fields)
 
-jsSubst var new (JSNew con [tag, vals]) =
-  JSNew con [tag, jsSubst var new vals]
+jsSubst var new (JSNew con vals) =
+  JSNew con $ map (jsSubst var new) vals
 
-jsSubst var new (JSNew con [JSFunction [] (JSReturn (JSApp fun vars))]) =
-  JSNew con [JSFunction [] (
-    JSReturn $ JSApp (jsSubst var new fun) (map (jsSubst var new) vars)
-  )]
-
-jsSubst var new (JSApp (JSIdent "__IDRRT__tailcall") [JSFunction [] (
-                  JSReturn (JSApp fun args)
-                )]) =
-                  JSApp (JSIdent "__IDRRT__tailcall") [JSFunction [] (
-                    JSReturn $ JSApp (jsSubst var new fun) (map (jsSubst var new) args)
-                  )]
-
-jsSubst var new (JSApp (JSProj obj field) args) =
-  JSApp (JSProj (jsSubst var new obj) field) $ map (jsSubst var new) args
+jsSubst var new (JSApp (JSProj (JSFunction args body) "apply") vals)
+  | var `notElem` args =
+      JSApp (JSProj (JSFunction args (jsSubst var new body)) "apply") (
+        map (jsSubst var new) vals
+      )
+  | otherwise =
+      JSApp (JSProj (JSFunction args body) "apply") (
+        map (jsSubst var new) vals
+      )
 
 jsSubst var new (JSApp (JSFunction [arg] body) vals)
   | var /= arg =
@@ -272,6 +280,12 @@ jsSubst var new (JSApp (JSFunction [arg] body) vals)
       JSApp (JSFunction [arg] (
         body
       )) $ map (jsSubst var new) vals
+
+jsSubst var new (JSApp lhs rhs) =
+  JSApp (jsSubst var new lhs) (map (jsSubst var new) rhs)
+
+jsSubst var new (JSFunction [] body) =
+  JSFunction [] (jsSubst var new body)
 
 jsSubst var new (JSReturn ret) =
   JSReturn $ jsSubst var new ret
@@ -291,11 +305,105 @@ jsSubst var new (JSIndex obj field) =
 jsSubst var new (JSCond conds) =
   JSCond (map ((jsSubst var new) *** (jsSubst var new)) conds)
 
+jsSubst var new (JSAssign lhs rhs) =
+  JSAssign (jsSubst var new lhs) (jsSubst var new rhs)
+
+jsSubst var new (JSAlloc val (Just js)) =
+  JSAlloc val (Just (jsSubst var new js))
+
 jsSubst _ _ js = js
 
+
+removeAllocations :: JS -> JS
+removeAllocations (JSSeq body) =
+  let opt = removeHelper (map removeAllocations body) in
+      case opt of
+           [ret] -> ret
+           _     -> JSSeq opt
+  where
+    removeHelper :: [JS] -> [JS]
+    removeHelper [js] = [js]
+    removeHelper ((JSAlloc name (Just val@(JSIdent _))):js) =
+      map (jsSubst name val) (removeHelper js)
+    removeHelper (j:js) = j : removeHelper js
+
+removeAllocations (JSFunction args body) =
+  JSFunction args $ removeAllocations body
+
+removeAllocations (JSReturn ret) =
+  JSReturn $ removeAllocations ret
+
+removeAllocations (JSApp fun args) =
+  JSApp (removeAllocations fun) (map removeAllocations args)
+
+removeAllocations (JSNew con args) =
+  JSNew con $ map removeAllocations args
+
+removeAllocations (JSOp op lhs rhs) =
+  JSOp op (removeAllocations lhs) (removeAllocations rhs)
+
+removeAllocations (JSProj obj field) =
+  JSProj (removeAllocations obj) field
+
+removeAllocations (JSArray vals) =
+  JSArray $ map removeAllocations vals
+
+removeAllocations (JSAssign lhs rhs) =
+  JSAssign (removeAllocations lhs) (removeAllocations rhs)
+
+removeAllocations (JSAlloc name (Just val)) =
+  JSAlloc name $ Just (removeAllocations val)
+
+removeAllocations (JSIndex val idx) =
+  JSIndex (removeAllocations val) (removeAllocations idx)
+
+removeAllocations (JSCond conds) =
+  JSCond $ map (removeAllocations *** removeAllocations) conds
+
+removeAllocations (JSTernary c t f) =
+  JSTernary (removeAllocations c) (removeAllocations t) (removeAllocations f)
+
+removeAllocations js = js
+
+
+isJSConstant :: JS -> Bool
+isJSConstant js
+  | JSString _ <- js = True
+  | JSChar _   <- js = True
+  | JSNum _    <- js = True
+  | JSType _   <- js = True
+
+  | JSApp (JSIdent "__IDRRT__bigInt") _ <- js = True
+  | otherwise = False
+
 inlineJS :: JS -> JS
-inlineJS (JSApp (JSFunction [] (JSSeq ret)) []) =
-  JSApp (JSFunction [] (JSSeq (map inlineJS ret))) []
+inlineJS (JSReturn (JSApp (JSFunction ["cse"] body) [val@(JSVar _)])) =
+  inlineJS $ jsSubst "cse" val body
+
+inlineJS (JSReturn (JSApp (JSFunction [arg] cond@(JSCond _)) [val])) =
+  JSSeq [ JSAlloc arg (Just (inlineJS val))
+        , inlineJS cond
+        ]
+
+inlineJS (JSApp (JSProj (JSFunction args (JSReturn body)) "apply") [
+    JSThis,JSProj var "vars"
+  ])
+  | var /= JSIdent "cse" =
+      inlineApply args body 0
+  where
+    inlineApply []     body _ = inlineJS body
+    inlineApply (a:as) body n =
+      inlineApply as (
+        jsSubst a (JSIndex (JSProj var "vars") (JSNum (JSInt n))) body
+      ) (n + 1)
+
+inlineJS (JSApp (JSIdent "__IDR__mEVAL0") [val])
+  | isJSConstant val = val
+
+inlineJS (JSApp (JSIdent "__IDRRT__tailcall") [
+    JSFunction [] (JSReturn val)
+  ])
+  | isJSConstant val = val
 
 inlineJS (JSApp (JSFunction [arg] (JSReturn ret)) [val])
   | JSNew con [tag, vals] <- ret
@@ -324,13 +432,9 @@ inlineJS (JSApp (JSFunction [arg] (JSReturn ret)) [val])
       JSOp op (jsSubst arg opt lhs) $
         (jsSubst arg opt rhs)
 
-  | JSApp (JSIdent "__IDRRT__tailcall") [JSFunction [] (
-      JSReturn (JSApp fun args)
-    )] <- ret
+  | JSApp (JSIdent fun) args <- ret
   , opt <- inlineJS val =
-      JSApp (JSIdent "__IDRRT__tailcall") [JSFunction [] (
-        JSReturn $ JSApp (jsSubst arg opt fun) (map (jsSubst arg opt) args)
-      )]
+      JSApp (JSIdent fun) $ map (jsSubst arg opt) args
 
 inlineJS (JSApp fun args) =
   JSApp (inlineJS fun) (map inlineJS args)
@@ -365,6 +469,9 @@ inlineJS (JSCond cases) =
 inlineJS (JSObject fields) =
   JSObject (map (second inlineJS) fields)
 
+inlineJS (JSOp op lhs rhs) =
+  JSOp op (inlineJS lhs) (inlineJS rhs)
+
 inlineJS js = js
 
 reduceJS :: [JS] -> [JS]
@@ -372,6 +479,152 @@ reduceJS js = reduceLoop [] ([], js)
 
 funName :: JS -> String
 funName (JSAlloc fun _) = fun
+
+
+deadEvalApplyCases :: [JS] -> [JS]
+deadEvalApplyCases js =
+  let tags = sort $ nub $ concatMap (getTags) js in
+      map (removeHelper tags) js
+      where
+        getTags :: JS -> [Int]
+        getTags (JSNew "__IDRRT__Con" [JSNum (JSInt tag), args]) =
+          tag : getTags args
+
+        getTags (JSNew _ args) = concatMap getTags args
+
+        getTags (JSFunction _ body) = getTags body
+
+        getTags (JSReturn ret) = getTags ret
+
+        getTags (JSApp lhs rhs) = getTags lhs ++ concatMap getTags rhs
+
+        getTags (JSSeq seq) = concatMap getTags seq
+
+        getTags (JSOp _ lhs rhs) = getTags lhs ++ getTags rhs
+
+        getTags (JSProj obj _) = getTags obj
+
+        getTags (JSArray vals) = concatMap getTags vals
+
+        getTags (JSAssign lhs rhs) = getTags lhs ++ getTags rhs
+
+        getTags (JSAlloc _ (Just val)) = getTags val
+
+        getTags (JSCond conds) =
+          concatMap (uncurry (++)) $ map (getTags *** getTags) conds
+
+        getTags (JSTernary c t f) = getTags c ++ getTags t ++ getTags f
+
+        getTags js = []
+        removeHelper :: [Int] -> JS -> JS
+        removeHelper tags (JSAlloc fun (Just (
+            JSApp (JSFunction [] (JSSeq seq)) []))
+          ) =
+            (JSAlloc fun (Just (
+              JSApp (JSFunction [] (JSSeq $ remover tags seq)) []))
+            )
+
+        removeHelper _ js = js
+
+        remover :: [Int] -> [JS] -> [JS]
+        remover tags (
+            j@(JSAssign ((JSIndex (JSIdent "t") (JSNum (JSInt tag)))) _):js
+          )
+          | tag `notElem` tags = remover tags js
+
+        remover tags (j:js) = j : remover tags js
+        remover _    []     = []
+
+
+initConstructors :: [JS] -> [JS]
+initConstructors js =
+    let tags = nub $ sort $ concat (map getTags js) in
+      map createConstant tags ++ replaceConstructors tags js
+      where
+        getTags :: JS -> [Int]
+        getTags (JSNew "__IDRRT__Con" [JSNum (JSInt tag), JSArray []]) = [tag]
+
+        getTags (JSNew _ args) = concatMap getTags args
+
+        getTags (JSFunction _ body) = getTags body
+
+        getTags (JSReturn ret) = getTags ret
+
+        getTags (JSApp lhs rhs) = getTags lhs ++ concatMap getTags rhs
+
+        getTags (JSSeq seq) = concatMap getTags seq
+
+        getTags (JSOp _ lhs rhs) = getTags lhs ++ getTags rhs
+
+        getTags (JSProj obj _) = getTags obj
+
+        getTags (JSArray vals) = concatMap getTags vals
+
+        getTags (JSAssign lhs rhs) = getTags lhs ++ getTags rhs
+
+        getTags (JSAlloc _ (Just val)) = getTags val
+
+        getTags (JSCond conds) =
+          concatMap (uncurry (++)) $ map (getTags *** getTags) conds
+
+        getTags (JSTernary c t f) = getTags c ++ getTags t ++ getTags f
+
+        getTags js = []
+
+        replaceConstructors :: [Int] -> [JS] -> [JS]
+        replaceConstructors tags js = map (replaceHelper tags) js
+          where
+            replaceHelper :: [Int] -> JS -> JS
+            replaceHelper tags (JSNew "__IDRRT__Con" [JSNum (JSInt tag), JSArray []])
+              | tag `elem` tags = JSIdent ("__IDRCTR__" ++ show tag)
+
+            replaceHelper tags (JSNew con args) =
+              JSNew con $ map (replaceHelper tags) args
+
+            replaceHelper tags (JSFunction fun body) =
+              JSFunction fun (replaceHelper tags body)
+
+            replaceHelper tags (JSReturn ret) =
+              JSReturn (replaceHelper tags ret)
+
+            replaceHelper tags (JSApp lhs rhs) =
+              JSApp (replaceHelper tags lhs) (map (replaceHelper tags) rhs)
+
+            replaceHelper tags (JSSeq seq) =
+              JSSeq $ map (replaceHelper tags) seq
+
+            replaceHelper tags (JSOp op lhs rhs) =
+              JSOp op (replaceHelper tags lhs) (replaceHelper tags rhs)
+
+            replaceHelper tags (JSProj obj field) =
+              JSProj (replaceHelper tags obj) field
+
+            replaceHelper tags (JSArray vals) =
+              JSArray $ map (replaceHelper tags) vals
+
+            replaceHelper tags (JSAssign lhs rhs) =
+              JSAssign (replaceHelper tags lhs) (replaceHelper tags rhs)
+
+            replaceHelper tags (JSAlloc var (Just val)) =
+              JSAlloc var $ Just (replaceHelper tags val)
+
+            replaceHelper tags (JSCond conds) =
+              JSCond (map ((replaceHelper tags) *** (replaceHelper tags)) conds)
+
+            replaceHelper tags (JSTernary c t f) =
+              JSTernary (replaceHelper tags c) (
+                replaceHelper tags t
+              ) (
+                replaceHelper tags f
+              )
+
+            replaceHelper tags js = js
+
+        createConstant :: Int -> JS
+        createConstant tag =
+          JSAlloc ("__IDRCTR__" ++ show tag) (Just (
+            JSNew (idrRTNamespace ++ "Con") [JSNum (JSInt tag), JSArray []]
+          ))
 
 removeIDs :: [JS] -> [JS]
 removeIDs js =
@@ -436,6 +689,92 @@ removeIDs js =
           JSArray $ map (removeIDCall ids) fields
 
         removeIDCall _ js = js
+
+inlineFunctions :: [JS] -> [JS]
+inlineFunctions js =
+  let funs       = collectFunctions js
+      occurences = map ((id . fst) &&& countAll js) funs in
+      removeDeadFunctions occurences js
+      where
+        removeDeadFunctions :: [(String, (Int, JS))] -> [JS] -> [JS]
+        removeDeadFunctions _ [] = []
+        removeDeadFunctions funOccur ((JSAlloc fun (Just (JSFunction  _ _))):js)
+          | Just (o, _) <- lookup fun funOccur
+          , o == 0 = removeDeadFunctions funOccur js
+
+        removeDeadFunctions funOccur (j:js) = j : removeDeadFunctions funOccur js
+
+
+        collectFunctions :: [JS] -> [(String, JS)]
+        collectFunctions js =
+          catMaybes $ map collectHelper js
+
+
+        collectHelper :: JS -> Maybe (String, JS)
+        collectHelper (JSAlloc fun (Just js@(JSFunction _ body)))
+          | fun /= "main" && nonRecur fun body = Just (fun, js)
+        collectHelper _                        = Nothing
+
+
+        nonRecur :: String -> JS -> Bool
+        nonRecur name body = countInvokations name body == 0
+
+
+        countAll :: [JS] -> (String, JS) -> (Int, JS)
+        countAll js (name, fun) = (sum $ map (countInvokations name) js, fun)
+
+
+        countInvokations :: String -> JS -> Int
+        countInvokations name (JSApp (JSIdent ident) args)
+          | name == ident = 1 + (sum $ map (countInvokations name) args)
+          | otherwise     = sum $ map (countInvokations name) args
+
+        countInvokations name (JSApp lhs rhs) =
+          countInvokations name lhs + (sum $ map (countInvokations name) rhs)
+
+        countInvokations name (JSFunction _ body) =
+          countInvokations name body
+
+        countInvokations name (JSSeq seq) =
+          sum $ map (countInvokations name) seq
+
+        countInvokations name (JSReturn ret) =
+          countInvokations name ret
+
+        countInvokations name (JSNew _ args) =
+          sum $ map (countInvokations name) args
+
+        countInvokations name (JSOp _ lhs rhs) =
+          countInvokations name lhs + countInvokations name rhs
+
+        countInvokations name (JSProj obj _) =
+          countInvokations name obj
+
+        countInvokations name (JSArray vals) =
+          sum $ map (countInvokations name) vals
+
+        countInvokations name (JSAssign _ rhs) =
+          countInvokations name rhs
+
+        countInvokations name (JSAlloc _ (Just js)) =
+          countInvokations name js
+
+        countInvokations name (JSIndex lhs rhs) =
+          countInvokations name lhs + countInvokations name rhs
+
+        countInvokations name (JSCond conds) =
+          sum $ map (uncurry (+)) (
+            map (countInvokations name *** countInvokations name) conds
+          )
+
+        countInvokations name (JSTernary c t f) =
+          sum $ [ countInvokations name c
+                , countInvokations name t
+                , countInvokations name f
+                ]
+
+        countInvokations _ _ = 0
+
 
 reduceConstant :: JS -> JS
 reduceConstant (JSApp (JSIdent "__IDRRT__tailcall") [JSFunction [] (
@@ -536,6 +875,12 @@ reduceLoop reduced (cons, program) =
         reduceCall funs (JSProj obj field) =
           JSProj (reduceCall funs obj) field
 
+        reduceCall funs (JSIndex obj idx) =
+          JSIndex (reduceCall funs obj) (reduceCall funs idx)
+
+        reduceCall funs (JSOp op rhs lhs) =
+          JSOp op (reduceCall funs rhs) (reduceCall funs lhs)
+
         reduceCall funs (JSCond conds) =
           JSCond $ map (reduceCall funs *** reduceCall funs) conds
 
@@ -575,7 +920,7 @@ codegenJavaScript target definitions filename outputType = do
     intercalate "\n" $ [ jsbn
                        , idrRuntime
                        , tgtRuntime
-                       ] ++ functions ++ [mainLoop, invokeLoop]
+                       ] ++ functions
     )
 
   setPermissions filename (emptyPermissions { readable   = True
@@ -588,10 +933,21 @@ codegenJavaScript target definitions filename outputType = do
 
     functions :: [String]
     functions =
-      map (compileJS . reduceConstants) ((reduceJS . removeIDs) $ map (optimizeJS . translateDeclaration) def)
+      let translated  =
+            concatMap translateDeclaration def ++ [mainLoop, invokeLoop]
 
-    mainLoop :: String
-    mainLoop = compileJS $
+          optimized    = map optimizeJS translated
+          idsRemoved   = removeIDs optimized
+          reduced      = reduceJS idsRemoved
+          constRemoved = map reduceConstants reduced
+          constrInit   = initConstructors constRemoved
+          removeAlloc  = map removeAllocations constrInit
+          deadElim     = deadEvalApplyCases removeAlloc
+          js           = inlineFunctions deadElim in
+          map compileJS js
+
+    mainLoop :: JS
+    mainLoop =
       JSAlloc "main" $ Just $ JSFunction [] (
         case target of
              Node       -> mainFun
@@ -606,10 +962,10 @@ codegenJavaScript target definitions filename outputType = do
         mainFun = jsTailcall $ jsCall runMain []
 
         runMain :: String
-        runMain = idrNamespace ++ translateName (MN 0 "runMain")
+        runMain = idrNamespace ++ translateName (sMN 0 "runMain")
 
-    invokeLoop :: String
-    invokeLoop  = compileJS $ jsCall "main" []
+    invokeLoop :: JS
+    invokeLoop  = jsCall "main" []
 
 translateIdentifier :: String -> String
 translateIdentifier =
@@ -671,15 +1027,15 @@ translateIdentifier =
 
 translateNamespace :: Name -> String
 translateNamespace (UN _)    = idrNamespace
-translateNamespace (NS _ ns) = idrNamespace ++ concatMap translateIdentifier ns
+translateNamespace (NS _ ns) = idrNamespace ++ concatMap (translateIdentifier . str) ns
 translateNamespace (MN _ _)  = idrNamespace
 translateNamespace (SN name) = idrNamespace ++ translateSpecialName name
 translateNamespace NErased   = idrNamespace
 
 translateName :: Name -> String
-translateName (UN name)   = 'u' : translateIdentifier name
+translateName (UN name)   = 'u' : translateIdentifier (str name)
 translateName (NS name _) = 'n' : translateName name
-translateName (MN i name) = 'm' : translateIdentifier name ++ show i
+translateName (MN i name) = 'm' : translateIdentifier (str name) ++ show i
 translateName (SN name)   = 's' : translateSpecialName name
 translateName NErased     = "e"
 
@@ -688,9 +1044,9 @@ translateSpecialName name
   | WhereN i m n  <- name =
     'w' : translateName m ++ translateName n ++ show i
   | InstanceN n s <- name =
-    'i' : translateName n ++ concatMap translateIdentifier s
+    'i' : translateName n ++ concatMap (translateIdentifier . str) s
   | ParentN n s   <- name =
-    'p' : translateName n ++ translateIdentifier s
+    'p' : translateName n ++ translateIdentifier (str s)
   | MethodN n     <- name =
     'm' : translateName n
   | CaseN n       <- name =
@@ -699,6 +1055,9 @@ translateSpecialName name
 translateConstant :: Const -> JS
 translateConstant (I i)                    = JSNum (JSInt i)
 translateConstant (Fl f)                   = JSNum (JSFloat f)
+translateConstant (Ch '\DEL')              = JSChar "'\\u007F'"
+translateConstant (Ch '\a')                = JSChar "'\\u0007'"
+translateConstant (Ch '\SO')               = JSChar "'\\u000E'"
 translateConstant (Ch c)                   = JSString [c]
 translateConstant (Str s)                  = JSString s
 translateConstant (AType (ATInt ITNative)) = JSType JSIntTy
@@ -712,42 +1071,48 @@ translateConstant (BI i)                   = jsBigInt $ JSString (show i)
 translateConstant c =
   JSError $ "Unimplemented Constant: " ++ show c
 
-translateDeclaration :: (String, SDecl) -> JS
+translateDeclaration :: (String, SDecl) -> [JS]
 translateDeclaration (path, SFun name params stackSize body)
-  | (MN _ "APPLY")        <- name
+  | (MN _ ap)             <- name
   , (SLet var val next)   <- body
-  , (SChkCase cvar cases) <- next =
+  , (SChkCase cvar cases) <- next
+  , ap == txt "APPLY" =
     let lvar   = translateVariableName var
         lookup = "[" ++ lvar ++ ".tag](fn0,arg0," ++ lvar ++ ")" in
-        JSSeq [ lookupTable [(var, "chk")] var cases
-              , jsDecl $ JSFunction ["fn0", "arg0"] (
-                  JSSeq [ JSAlloc "__var_0" (Just $ JSIdent "fn0")
-                        , JSReturn $ jsLet (translateVariableName var) (
-                            translateExpression val
-                          ) (JSTernary (
-                               (JSVar var `jsInstanceOf` jsCon) `jsAnd`
-                               (hasProp lookupTableName (translateVariableName var))
-                            ) (JSIdent $
-                                 lookupTableName ++ lookup
-                              ) JSNull
-                            )
-                        ]
-                )
-              ]
+        [ lookupTable [(var, "chk")] var cases
+        , jsDecl $ JSFunction ["fn0", "arg0"] (
+            JSSeq [ JSAlloc "__var_0" (Just $ JSIdent "fn0")
+                  , JSAlloc (translateVariableName var) (
+                      Just $ translateExpression val
+                    )
+                  , JSReturn $ (JSTernary (
+                       (JSVar var `jsInstanceOf` jsCon) `jsAnd`
+                       (hasProp lookupTableName (translateVariableName var))
+                    ) (JSIdent $
+                         lookupTableName ++ lookup
+                      ) JSNull
+                    )
+                  ]
+          )
+        ]
 
-  | (MN _ "EVAL")        <- name
-  , (SChkCase var cases) <- body =
-    JSSeq [ lookupTable [] var cases
-          , jsDecl $ JSFunction ["arg0"] (JSReturn $
-              JSTernary (
-                (JSIdent "arg0" `jsInstanceOf` jsCon) `jsAnd`
-                (hasProp lookupTableName "arg0")
-              ) (JSRaw $ lookupTableName ++ "[arg0.tag](arg0)") (JSIdent "arg0")
-            )
-          ]
+  | (MN _ ev)            <- name
+  , (SChkCase var cases) <- body
+  , ev == txt "EVAL" =
+    [ lookupTable [] var cases
+    , jsDecl $ JSFunction ["arg0"] (JSReturn $
+        JSTernary (
+          (JSIdent "arg0" `jsInstanceOf` jsCon) `jsAnd`
+          (hasProp lookupTableName "arg0")
+        ) (JSApp
+            (JSIndex (JSIdent lookupTableName) (JSProj (JSIdent "arg0") "tag"))
+            [JSIdent "arg0"]
+        ) (JSIdent "arg0")
+      )
+    ]
   | otherwise =
     let fun = translateExpression body in
-        jsDecl $ jsFun fun
+        [jsDecl $ jsFun fun]
 
   where
     hasProp :: String -> String -> JS
@@ -798,23 +1163,16 @@ translateDeclaration (path, SFun name params stackSize body)
       JSFunction (p ++ map snd aux) (
         JSSeq $
         zipWith assignVar [0..] p ++
-        map allocVar [numP .. (numP + stackSize - 1)] ++
         map assignAux aux ++
         [JSReturn body]
       )
       where
-        numP :: Int
-        numP = length params
-
-        allocVar :: Int -> JS
-        allocVar n = JSAlloc (jsVar n) Nothing
-
         assignVar :: Int -> String -> JS
         assignVar n s = JSAlloc (jsVar n)  (Just $ JSIdent s)
 
         assignAux :: (LVar, String) -> JS
-        assignAux (var, val) =
-          JSAssign (JSIdent $ translateVariableName var) (JSIdent val)
+        assignAux (Loc var, val) =
+          JSAlloc (jsVar var) (Just $ JSIdent val)
 
         p :: [String]
         p = map translateName params

@@ -33,21 +33,22 @@ import qualified Data.ByteString.UTF8 as UTF8
 -- using pre-build and user-defined operator/fixity declarations
 table :: [FixDecl] -> OperatorTable IdrisParser PTerm
 table fixes
-   = [[prefix "-" (\fc x -> PApp fc (PRef fc (UN "-"))
-        [pexp (PApp fc (PRef fc (UN "fromInteger")) [pexp (PConstant (BI 0))]), pexp x])]]
+   = [[prefix "-" (\fc x -> PApp fc (PRef fc (sUN "-"))
+        [pexp (PApp fc (PRef fc (sUN "fromInteger")) [pexp (PConstant (BI 0))]), pexp x])]]
        ++ toTable (reverse fixes) ++
       [[backtick],
+       [binary "$" (\fc x y -> PApp fc x [pexp y]) AssocRight],
        [binary "="  PEq AssocLeft],
-       [binary "->" (\fc x y -> PPi expl (MN 42 "__pi_arg") x y) AssocRight]]
+       [binary "->" (\fc x y -> PPi expl (sMN 42 "__pi_arg") x y) AssocRight]]
 
 -- | Calculates table for fixtiy declarations
 toTable :: [FixDecl] -> OperatorTable IdrisParser PTerm
 toTable fs = map (map toBin)
                  (groupBy (\ (Fix x _) (Fix y _) -> prec x == prec y) fs)
    where toBin (Fix (PrefixN _) op) = prefix op
-                                       (\fc x -> PApp fc (PRef fc (UN op)) [pexp x])
+                                       (\fc x -> PApp fc (PRef fc (sUN op)) [pexp x])
          toBin (Fix f op)
-            = binary op (\fc x y -> PApp fc (PRef fc (UN op)) [pexp x,pexp y]) (assoc f)
+            = binary op (\fc x y -> PApp fc (PRef fc (sUN op)) [pexp x,pexp y]) (assoc f)
          assoc (Infixl _) = AssocLeft
          assoc (Infixr _) = AssocRight
          assoc (InfixN _) = AssocNone
@@ -55,7 +56,9 @@ toTable fs = map (map toBin)
 -- | Binary operator
 binary :: String -> (FC -> PTerm -> PTerm -> PTerm) -> Assoc -> Operator IdrisParser PTerm
 binary name f = Infix (do fc <- getFC
+                          indentPropHolds gtProp
                           reservedOp name
+                          indentPropHolds gtProp
                           doc <- option "" (docComment '^')
                           return (f fc))
 
@@ -63,12 +66,15 @@ binary name f = Infix (do fc <- getFC
 prefix :: String -> (FC -> PTerm -> PTerm) -> Operator IdrisParser PTerm
 prefix name f = Prefix (do reservedOp name
                            fc <- getFC
+                           indentPropHolds gtProp
                            return (f fc))
 
 -- | Backtick operator
 backtick :: Operator IdrisParser PTerm
-backtick = Infix (do lchar '`'; n <- fnName
+backtick = Infix (do indentPropHolds gtProp
+                     lchar '`'; n <- fnName
                      lchar '`'
+                     indentPropHolds gtProp
                      fc <- getFC
                      return (\x y -> PApp fc (PRef fc n) [pexp x, pexp y])) AssocNone
 
