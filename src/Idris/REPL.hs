@@ -65,6 +65,7 @@ import Control.Concurrent.MVar
 import Network
 import Control.Concurrent
 import Data.Maybe
+import qualified Data.Map as M
 import Data.List
 import Data.Char
 import Data.Version
@@ -260,6 +261,29 @@ ideslave orig mods
                        process stdout fn (MakeWith False line (sUN name))
                      Just (IdeSlave.ProofSearch line name hints) ->
                        process stdout fn (DoProofSearch False line (sUN name) (map sUN hints))
+                     Just (IdeSlave.CompatibleIdentifiers mv) ->
+                                                                 do ctx <- getContext
+                                                                    ist <- getIState
+                                                                    let ns = lookupNames (sUN mv) ctx
+                                                                        metavars = mapMaybe (\n -> do c <- lookup n (idris_metavars ist)
+                                                                                                      return (n, c)) ns
+                                                                    n <- case metavars of
+                                                                           [] -> ierror (Msg $ "Cannot find metavariable" ++ show mv)
+                                                                           [(n, (_,_,False))] -> return n
+                                                                           [(_, (_,_,True))] -> ierror (Msg $ "Declarations not solvable using prover")
+                                                                    let globals = map fst $ M.toList $ definitions ctx
+                                                                    locals <- scoper n
+                                                                    let names = mapMaybe (\n -> case n of
+                                                                                                  UN _ -> Just n
+                                                                                                  _ -> Nothing) (locals ++ globals)
+                                                                    compatibles <- fmap (mapMaybe (\x -> x)) $ mapM (\nm -> do ct <- filterer n nm 
+                                                                                                                               return $ fmap (const nm) ct)
+                                                                                                        names
+                                                                    let good = IdeSlave.SexpList [IdeSlave.SymbolAtom "ok", IdeSlave.toSExp compatibles]
+                                                                    runIO $ putStrLn $ IdeSlave.convSExp "return" good id
+
+                                                                    return () 
+ 
                      Nothing -> do iPrintError "did not understand")
                (\e -> do iPrintError $ show e))
          (\e -> do iPrintError $ show e)
@@ -324,6 +348,7 @@ ideslaveProcess fn (AddClauseFrom False pos str) = process stdout fn (AddClauseF
 ideslaveProcess fn (AddMissing False pos str) = process stdout fn (AddMissing False pos str)
 ideslaveProcess fn (MakeWith False pos str) = process stdout fn (MakeWith False pos str)
 ideslaveProcess fn (DoProofSearch False pos str xs) = process stdout fn (DoProofSearch False pos str xs)
+ideslaveProcess fn (ListCompatibleIdentifiers mv) = process stdout fn (ListCompatibleIdentifiers mv)
 ideslaveProcess fn _ = iPrintError "command not recognized or not supported"
 
 
@@ -931,6 +956,27 @@ process h fn ListErrorHandlers =
        [] -> iPrintResult "No registered error handlers"
        handlers ->
            iPrintResult $ "Registered error handlers: " ++ (concat . intersperse ", " . map show) handlers
+
+process h fn (ListCompatibleIdentifiers mv) =
+  do ctx <- getContext
+     ist <- getIState
+     let ns = lookupNames mv ctx
+         metavars = mapMaybe (\n -> do c <- lookup n (idris_metavars ist)
+                                       return (n, c)) ns
+     n <- case metavars of
+            [] -> ierror (Msg $ "Cannot find metavariable" ++ show mv)
+            [(n, (_,_,False))] -> return n
+            [(_, (_,_,True))] -> ierror (Msg $ "Declarations not solvable using prover")
+     let globals = map fst $ M.toList $ definitions ctx
+     locals <- scoper n
+     let names = mapMaybe (\n -> case n of
+                                   UN _ -> Just n
+                                   _ -> Nothing) (locals ++ globals)
+     compatibles <- fmap (mapMaybe id) $ mapM (\nm -> do ct <- filterer n nm 
+                                                         return $ fmap (const nm) ct)
+                                         names
+     mapM_ (iPrintResult . show) compatibles
+     
 
 classInfo :: ClassInfo -> Idris ()
 classInfo ci = do iputStrLn "Methods:\n"

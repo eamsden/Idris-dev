@@ -97,6 +97,8 @@ pCmd = do P.whiteSpace; try (do cmd ["q", "quit"]; eof; return Quit)
               <|> try (do cmd ["x"]; P.whiteSpace; t <- P.fullExpr defaultSyntax; return (ExecVal t))
               <|> try (do cmd ["patt"]; P.whiteSpace; t <- P.fullExpr defaultSyntax; return (Pattelab t))
               <|> try (do cmd ["errorhandlers"]; eof ; return ListErrorHandlers)
+              <|> try (do cmd ["ci", "compatibleidentifiers"]; mv <- P.name; return (ListCompatibleIdentifiers mv))
+              <|> try (do cmd ["gre", "generaterefinedexpression"]; mv <- P.name; x <- P.identifier; return (GenerateRefinedExpression mv x))
               <|> do P.whiteSpace; do eof; return NOP
                              <|> do t <- P.fullExpr defaultSyntax; return (Eval t)
 

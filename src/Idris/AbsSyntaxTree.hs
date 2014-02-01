@@ -278,6 +278,8 @@ data Command = Quit
              | ColourOn
              | ColourOff
              | ListErrorHandlers
+             | ListCompatibleIdentifiers Name
+             | GenerateRefinedExpression Name String
 
 data Opt = Filename String
          | Ver

@@ -22,6 +22,8 @@ import System.Console.Haskeline
 import System.Console.Haskeline.History
 import Control.Monad.State.Strict
 
+import Data.List
+
 import Util.Pretty
 import Debug.Trace
 
@@ -34,6 +36,27 @@ prover lit x =
                                then prove ctxt lit x t
                                else ifail $ show x ++ " is not a metavariable"
                   _ -> fail "No such metavariable"
+
+scoper :: Name -> Idris [Name]
+scoper x =
+       do ctxt <- getContext
+          i <- getIState
+          case lookupTy x ctxt of
+            [t] -> if elem x (map fst (idris_metavars i))
+                     then scope ctxt x t
+                     else ifail $ show x ++ " is not a metavariable."
+            _ -> fail "No such metavariable"
+
+filterer :: Name -> Name -> Idris (Maybe Int)
+filterer mv x =
+         do ctxt <- getContext
+            i <- getIState
+            case lookupTy mv ctxt of
+              [t] -> if elem mv (map fst (idris_metavars i))
+                       then tyFilter ctxt mv x t
+                       else ifail $ show x ++ " is not a metavariable."
+              _ -> fail "No such metavariable"
+     
 
 showProof :: Bool -> Name -> [String] -> String
 showProof lit n ps
@@ -86,6 +109,40 @@ elabStep :: ElabState [PDecl] -> ElabD a -> Idris (a, ElabState [PDecl])
 elabStep st e = do case runStateT e st of
                      OK (a, st') -> return (a, st')
                      Error a -> ierror a
+
+scope :: Context -> Name -> Type -> Idris [Name]
+scope ctxt n ty = do let ps = initElaborator n ctxt ty
+                     scopeE (ES (ps, []) "" Nothing)
+
+tyFilter :: Context -> Name -> Name -> Type -> Idris (Maybe Int)
+tyFilter ctxt mv x ty = do let ps = initElaborator mv ctxt ty
+                           tyFilterE x (ES (ps, []) "" Nothing)
+
+tyFilterE :: Name -> ElabState [PDecl] -> Idris (Maybe Int)
+tyFilterE x e
+    = do i <- getIState
+         st <- idrisCatch
+           (do
+            (_, st) <- elabStep e $ do
+                                       runTac True i Intros
+                                       runTac True i (Refine x [])
+            return $ Just st) 
+           (\err -> return Nothing)
+         case st of
+           Nothing -> return Nothing
+           Just st -> do
+                         let unfilled = holes $ proof st
+                             nonunified = dontunify $ proof st
+                         return $ Just $ length $ intersect unfilled nonunified
+                     
+scopeE :: ElabState [PDecl] -> Idris [Name]
+scopeE e
+    = do i <- getIState
+         st <- idrisCatch
+           (do (_, st) <- elabStep e (runTac True i Intros); return st)
+           (\err -> do iPrintError (pshow i err); return e)
+         let OK env = envAtFocus $ proof st
+         return $ map fst env
 
 dumpState :: IState -> ProofState -> Idris ()
 dumpState ist (PS nm [] _ _ tm _ _ _ _ _ _ _ _ _ _ _ _ _ _) =

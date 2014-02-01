@@ -126,6 +126,7 @@ data IdeSlaveCommand = REPLCompletions String
                      | MakeWithBlock Int String
                      | ProofSearch Int String [String]
                      | LoadFile String
+                     | CompatibleIdentifiers String
   deriving Show
 
 sexpToCommand :: SExp -> Maybe IdeSlaveCommand
@@ -143,6 +144,7 @@ sexpToCommand (SexpList [SymbolAtom "proof-search", IntegerAtom line, StringAtom
   where getHints = mapM (\h -> case h of
                                  StringAtom s -> Just s
                                  _            -> Nothing)
+sexpToCommand (SexpList [SymbolAtom "compatible-identifiers", StringAtom name])         = Just (CompatibleIdentifiers name)
 sexpToCommand _                                                                         = Nothing
 
 parseMessage :: String -> Either Err (SExp, Integer)
