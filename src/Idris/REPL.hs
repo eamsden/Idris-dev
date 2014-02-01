@@ -283,11 +283,35 @@ ideslave orig mods
                                                                     runIO $ putStrLn $ IdeSlave.convSExp "return" good id
 
                                                                     return () 
+                     Just (IdeSlave.MakeRefinedExpression mv x) ->
+                       do ctxt <- getContext
+                          ist <- getIState
+                          let ns = lookupNames (sUN mv) ctxt
+                              metavars = mapMaybe (\n -> do c <- lookup n (idris_metavars ist)
+                                                            return (n, c)) ns
+                          n <- case metavars of
+                                 [] -> ierror (Msg $ "Cannot find metavariable" ++ show mv)
+                                 [(n, (_,_,False))] -> return n
+                                 [(_, (_,_,True))] -> ierror (Msg $ "Declarations not solvable using prover")
+                          mArgCt <- filterer n (sUN x)
+                          case mArgCt of
+                            Nothing -> ierror (Msg $ "Identifier " ++ x ++ " is not compatible with metavariable " ++ mv)
+                            Just argCt ->
+                              do uns <- getUniqs argCt mv 0
+                                 let exprStr = "(" ++ x ++ (concatMap (" ?" ++) uns) ++ ")"
+                                 let good = IdeSlave.SexpList [IdeSlave.SymbolAtom "ok", IdeSlave.StringAtom exprStr]
+                                 runIO $ putStrLn $ IdeSlave.convSExp "return" good id
  
                      Nothing -> do iPrintError "did not understand")
                (\e -> do iPrintError $ show e))
          (\e -> do iPrintError $ show e)
        ideslave orig mods
+  where
+    getUniqs 0 _ _ = return []
+    getUniqs n x i = do
+      (x', i') <- getUniq x i
+      rest <- getUniqs (n-1) x i'
+      return $ x' : rest
 
 ideslaveProcess :: FilePath -> Command -> Idris ()
 ideslaveProcess fn Help = process stdout fn Help

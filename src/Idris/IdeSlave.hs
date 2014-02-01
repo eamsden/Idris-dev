@@ -127,6 +127,7 @@ data IdeSlaveCommand = REPLCompletions String
                      | ProofSearch Int String [String]
                      | LoadFile String
                      | CompatibleIdentifiers String
+                     | MakeRefinedExpression String String
   deriving Show
 
 sexpToCommand :: SExp -> Maybe IdeSlaveCommand
@@ -145,6 +146,7 @@ sexpToCommand (SexpList [SymbolAtom "proof-search", IntegerAtom line, StringAtom
                                  StringAtom s -> Just s
                                  _            -> Nothing)
 sexpToCommand (SexpList [SymbolAtom "compatible-identifiers", StringAtom name])         = Just (CompatibleIdentifiers name)
+sexpToCommand (SexpList [SymbolAtom "make-refined-expression", StringAtom mvname, StringAtom identifier]) = Just (MakeRefinedExpression mvname identifier)
 sexpToCommand _                                                                         = Nothing
 
 parseMessage :: String -> Either Err (SExp, Integer)
