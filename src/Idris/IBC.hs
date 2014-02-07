@@ -26,7 +26,7 @@ import Util.Zlib (decompressEither)
 
 
 ibcVersion :: Word8
-ibcVersion = 56
+ibcVersion = 59
 
 
 data IBCFile = IBCFile { ver :: Word8,
@@ -606,6 +606,7 @@ instance Binary Const where
                 B16V x1 -> putWord8 22 >> put x1
                 B32V x1 -> putWord8 23 >> put x1
                 B64V x1 -> putWord8 24 >> put x1
+                BufferType -> putWord8 25
         get
           = do i <- getWord8
                case i of
@@ -646,6 +647,7 @@ instance Binary Const where
                    22 -> fmap B16V get
                    23 -> fmap B32V get
                    24 -> fmap B64V get
+                   25 -> return BufferType
 
                    _ -> error "Corrupted binary data for Const"
 
@@ -1526,6 +1528,19 @@ instance (Binary t) => Binary (PData' t) where
                            return (PLaterdecl x1 x2)
                    _ -> error "Corrupted binary data for PData'"
 
+instance Binary PunInfo where
+        put x
+          = case x of
+              TypeOrTerm -> putWord8 0
+              IsType     -> putWord8 1
+              IsTerm     -> putWord8 2
+        get
+          = do i <- getWord8
+               case i of
+                 0 -> return TypeOrTerm
+                 1 -> return IsType
+                 2 -> return IsTerm
+
 instance Binary PTerm where
         put x
           = case x of
@@ -1572,8 +1587,9 @@ instance Binary PTerm where
                                      put x1
                                      put x2
                                      put x3
-                PTrue x1 -> do putWord8 12
-                               put x1
+                PTrue x1 x2 -> do putWord8 12
+                                  put x1
+                                  put x2
                 PFalse x1 -> do putWord8 13
                                 put x1
                 PRefl x1 x2 -> do putWord8 14
@@ -1590,10 +1606,11 @@ instance Binary PTerm where
                                            put x2
                                            put x3
                                            put x4
-                PPair x1 x2 x3 -> do putWord8 18
-                                     put x1
-                                     put x2
-                                     put x3
+                PPair x1 x2 x3 x4 -> do putWord8 18
+                                        put x1
+                                        put x2
+                                        put x3
+                                        put x4
                 PDPair x1 x2 x3 x4 -> do putWord8 19
                                          put x1
                                          put x2
@@ -1633,6 +1650,10 @@ instance Binary PTerm where
                                    put x1
                 PNoImplicits x1 -> do putWord8 36
                                       put x1
+                PDisamb x1 x2 -> do putWord8 37
+                                    put x1
+                                    put x2
+
         get
           = do i <- getWord8
                case i of
@@ -1680,7 +1701,8 @@ instance Binary PTerm where
                             x3 <- get
                             return (PCase x1 x2 x3)
                    12 -> do x1 <- get
-                            return (PTrue x1)
+                            x2 <- get
+                            return (PTrue x1 x2)
                    13 -> do x1 <- get
                             return (PFalse x1)
                    14 -> do x1 <- get
@@ -1700,7 +1722,8 @@ instance Binary PTerm where
                    18 -> do x1 <- get
                             x2 <- get
                             x3 <- get
-                            return (PPair x1 x2 x3)
+                            x4 <- get
+                            return (PPair x1 x2 x3 x4)
                    19 -> do x1 <- get
                             x2 <- get
                             x3 <- get
@@ -1740,6 +1763,9 @@ instance Binary PTerm where
                             return (PUnifyLog x1)
                    36 -> do x1 <- get
                             return (PNoImplicits x1)
+                   37 -> do x1 <- get
+                            x2 <- get
+                            return (PDisamb x1 x2)
                    _ -> error "Corrupted binary data for PTerm"
 
 instance (Binary t) => Binary (PTactic' t) where

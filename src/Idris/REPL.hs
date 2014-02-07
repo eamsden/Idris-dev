@@ -8,13 +8,14 @@ import Idris.REPLParser
 import Idris.ElabDecls
 import Idris.ElabTerm
 import Idris.Error
+import Idris.ErrReverse
 import Idris.Delaborate
 import Idris.Prover
 import Idris.Parser
 import Idris.Primitives
 import Idris.Coverage
 import Idris.UnusedArgs
-import Idris.Docs
+import Idris.Docs hiding (Doc)
 import Idris.Help
 import Idris.Completion
 import qualified Idris.IdeSlave as IdeSlave
@@ -30,6 +31,7 @@ import Version_idris (gitHash)
 import Util.System
 import Util.DynamicLinker
 import Util.Net (listenOnLocalhost)
+import Util.Pretty hiding ((</>))
 
 import Idris.Core.Evaluate
 import Idris.Core.Execute (execute)
@@ -373,6 +375,8 @@ ideslaveProcess fn (AddMissing False pos str) = process stdout fn (AddMissing Fa
 ideslaveProcess fn (MakeWith False pos str) = process stdout fn (MakeWith False pos str)
 ideslaveProcess fn (DoProofSearch False pos str xs) = process stdout fn (DoProofSearch False pos str xs)
 ideslaveProcess fn (ListCompatibleIdentifiers mv) = process stdout fn (ListCompatibleIdentifiers mv)
+ideslaveProcess fn (SetConsoleWidth w) = do process stdout fn (SetConsoleWidth w)
+                                            iPrintResult ""
 ideslaveProcess fn _ = iPrintError "command not recognized or not supported"
 
 
@@ -509,42 +513,48 @@ process h fn (Eval t)
 process h fn (ExecVal t)
                   = do ctxt <- getContext
                        ist <- getIState
+                       let imp = opt_showimp (idris_options ist)
                        (tm, ty) <- elabVal toplevel False t
 --                       let tm' = normaliseAll ctxt [] tm
                        let ty' = normaliseAll ctxt [] ty
                        res <- execute tm
-                       ihPrintResult h (showTm ist (delab ist res) ++ " : " ++
-                                        showTm ist (delab ist ty'))
+                       let (resOut, tyOut) = (prettyImp imp (delab ist res),
+                                              prettyImp imp (delab ist ty'))
+                       ihPrintTermWithType h resOut tyOut
+
 process h fn (Check (PRef _ n))
    = do ctxt <- getContext
         ist <- getIState
         imp <- impShow
-        c <- colourise
         case lookupNames n ctxt of
           ts@(t:_) ->
             case lookup t (idris_metavars ist) of
-                Just (_, i, _) -> ihPrintResult h (showMetavarInfo c imp ist n i)
+                Just (_, i, _) -> ihRenderResult h . fmap (fancifyAnnots ist) $
+                                  showMetavarInfo imp ist n i
                 Nothing -> ihPrintFunTypes h n (map (\n -> (n, delabTy ist n)) ts)
           [] -> ihPrintError h $ "No such variable " ++ show n
   where
-    showMetavarInfo c imp ist n i
+    showMetavarInfo imp ist n i
          = case lookupTy n (tt_ctxt ist) of
-                (ty:_) -> putTy c imp ist i (delab ist ty)
-    putTy c imp ist 0 sc = putGoal c imp ist sc
-    putTy c imp ist i (PPi _ n t sc)
-               = let current = "  " ++
+                (ty:_) -> putTy imp ist i [] (delab ist (errReverse ist ty))
+    putTy :: Bool -> IState -> Int -> [(Name, Bool)] -> PTerm -> Doc OutputAnnotation
+    putTy imp ist 0 bnd sc = putGoal imp ist bnd sc
+    putTy imp ist i bnd (PPi _ n t sc)
+               = let current = text "  " <>
                                (case n of
-                                   MN _ _ -> "_"
-                                   UN nm | ('_':'_':_) <- str nm -> "_"
-                                   _ -> showName (Just ist) [] False c n) ++
-                               " : " ++ showTm ist t ++ "\n"
+                                   MN _ _ -> text "_"
+                                   UN nm | ('_':'_':_) <- str nm -> text "_"
+                                   _ -> bindingOf n False) <+>
+                               colon <+> align (tPretty bnd ist t) <> line
                  in
-                    current ++ putTy c imp ist (i-1) sc
-    putTy c imp ist _ sc = putGoal c imp ist sc
-    putGoal c imp ist g
-               = "--------------------------------------\n" ++
-                 showName (Just ist) [] False c n ++ " : " ++
-                 showTm ist g
+                    current <> putTy imp ist (i-1) ((n,False):bnd) sc
+    putTy imp ist _ bnd sc = putGoal imp ist ((n,False):bnd) sc
+    putGoal imp ist bnd g
+               = text "--------------------------------------" <$>
+                 annotate (AnnName n Nothing Nothing) (text $ show n) <+> colon <+>
+                 align (tPretty bnd ist g)
+
+    tPretty bnd ist t = pprintPTerm (opt_showimp (idris_options ist)) bnd t
 
 
 process h fn (Check t)
@@ -980,6 +990,8 @@ process h fn ListErrorHandlers =
        [] -> iPrintResult "No registered error handlers"
        handlers ->
            iPrintResult $ "Registered error handlers: " ++ (concat . intersperse ", " . map show) handlers
+process h fn (SetConsoleWidth w) = setWidth w
+
 
 process h fn (ListCompatibleIdentifiers mv) =
   do ctx <- getContext
@@ -1085,6 +1097,7 @@ parseArgs ("--package":n:ns)     = Pkg n : (parseArgs ns)
 parseArgs ("-p":n:ns)            = Pkg n : (parseArgs ns)
 parseArgs ("--build":n:ns)       = PkgBuild n : (parseArgs ns)
 parseArgs ("--install":n:ns)     = PkgInstall n : (parseArgs ns)
+parseArgs ("--repl":n:ns)        = PkgREPL n : (parseArgs ns)
 parseArgs ("--clean":n:ns)       = PkgClean n : (parseArgs ns)
 parseArgs ("--checkpkg":n:ns)    = PkgCheck n : (parseArgs ns)
 -- Misc Options
@@ -1401,6 +1414,10 @@ getPkg _ = Nothing
 getPkgClean :: Opt -> Maybe String
 getPkgClean (PkgClean str) = Just str
 getPkgClean _ = Nothing
+
+getPkgREPL :: Opt -> Maybe String
+getPkgREPL (PkgREPL str) = Just str
+getPkgREPL _ = Nothing
 
 getPkgCheck :: Opt -> Maybe String
 getPkgCheck (PkgCheck str) = Just str

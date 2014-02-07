@@ -22,7 +22,7 @@ import System.IO
 import Control.Monad.Trans.State.Strict
 import Control.Monad.Trans.Error
 
-import Data.List
+import Data.List hiding (group)
 import Data.Char
 import qualified Data.Map as M
 import qualified Data.Text as T
@@ -82,6 +82,11 @@ data LanguageExt = TypeProviders | ErrorReflection deriving (Show, Eq, Read, Ord
 
 -- | The output mode in use
 data OutputMode = RawOutput | IdeSlave Integer deriving Show
+
+-- | How wide is the console?
+data ConsoleWidth = InfinitelyWide -- ^ Have pretty-printer assume that lines should not be broken
+                  | ColsWide Int -- ^ Manually specified - must be positive
+                  | AutomaticWidth -- ^ Attempt to determine width, or 80 otherwise
 
 -- TODO: Add 'module data' to IState, which can be saved out and reloaded quickly (i.e
 -- without typechecking).
@@ -144,8 +149,8 @@ data IState = IState {
     idris_errorhandlers :: [Name], -- ^ Global error handlers
     idris_nameIdx :: (Int, Ctxt (Int, Name)),
     idris_function_errorhandlers :: Ctxt (M.Map Name (S.Set Name)), -- ^ Specific error handlers
-    module_aliases :: M.Map [T.Text] [T.Text]
-
+    module_aliases :: M.Map [T.Text] [T.Text],
+    idris_consolewidth :: ConsoleWidth -- ^ How many chars wide is the console?
    }
 
 data SizeChange = Smaller | Same | Bigger | Unknown
@@ -215,6 +220,7 @@ idrisInit = IState initContext [] [] emptyContext emptyContext emptyContext
                    [] [] defaultOpts 6 [] [] [] [] [] [] [] [] [] [] [] [] []
                    [] Nothing Nothing [] [] [] Hidden False [] Nothing [] [] RawOutput
                    True defaultTheme stdout [] (0, emptyContext) emptyContext M.empty
+                   AutomaticWidth
 
 -- | The monad for the main REPL - reading and processing files and updating
 -- global state (hence the IO inner monad).
@@ -280,6 +286,7 @@ data Command = Quit
              | ListErrorHandlers
              | ListCompatibleIdentifiers Name
              | GenerateRefinedExpression Name String
+             | SetConsoleWidth ConsoleWidth
 
 data Opt = Filename String
          | Ver
@@ -312,6 +319,7 @@ data Opt = Filename String
          | PkgInstall String
          | PkgClean String
          | PkgCheck String
+         | PkgREPL String
          | WarnOnly
          | Pkg String
          | BCAsm String
@@ -326,6 +334,7 @@ data Opt = Filename String
          | OptLevel Word
          | Client String
          | ShowOrigErr
+         | AutoWidth -- ^ Automatically adjust terminal width
     deriving (Show, Eq)
 
 -- Parsed declarations
@@ -596,6 +605,8 @@ updateNs ns t = mapPT updateRef t
 --                                      (map (updateDNs ns) ds)
 -- updateDNs ns c = c
 
+data PunInfo = IsType | IsTerm | TypeOrTerm deriving (Eq, Show)
+
 -- | High level language terms
 data PTerm = PQuote Raw
            | PRef FC Name
@@ -609,13 +620,13 @@ data PTerm = PQuote Raw
            | PAppBind FC PTerm [PArg] -- ^ implicitly bound application
            | PMatchApp FC Name -- ^ Make an application by type matching
            | PCase FC PTerm [(PTerm, PTerm)]
-           | PTrue FC
+           | PTrue FC PunInfo
            | PFalse FC
            | PRefl FC PTerm
            | PResolveTC FC
            | PEq FC PTerm PTerm
            | PRewrite FC PTerm PTerm (Maybe PTerm)
-           | PPair FC PTerm PTerm
+           | PPair FC PunInfo PTerm PTerm
            | PDPair FC PTerm PTerm PTerm
            | PAlternative Bool [PTerm] -- True if only one may work
            | PHidden PTerm -- ^ Irrelevant or hidden pattern
@@ -655,7 +666,7 @@ mapPT f t = f (mpt t) where
   mpt (PCase fc c os) = PCase fc (mapPT f c) (map (pmap (mapPT f)) os)
   mpt (PEq fc l r) = PEq fc (mapPT f l) (mapPT f r)
   mpt (PTyped l r) = PTyped (mapPT f l) (mapPT f r)
-  mpt (PPair fc l r) = PPair fc (mapPT f l) (mapPT f r)
+  mpt (PPair fc p l r) = PPair fc p (mapPT f l) (mapPT f r)
   mpt (PDPair fc l t r) = PDPair fc (mapPT f l) (mapPT f t) (mapPT f r)
   mpt (PAlternative a as) = PAlternative a (map (mapPT f) as)
   mpt (PHidden t) = PHidden (mapPT f t)
@@ -675,7 +686,7 @@ data PTactic' t = Intro [Name] | Intros | Focus Name
                 | Equiv t
                 | MatchRefine Name
                 | LetTac Name t | LetTacTy Name t t
-                | Exact t | Compute | Trivial
+                | Exact t | Compute | Trivial | TCInstance
                 | ProofSearch (Maybe Name) Name [Name]
                 | Solve
                 | Attack
@@ -693,7 +704,6 @@ data PTactic' t = Intro [Name] | Intros | Focus Name
 deriving instance Binary PTactic'
 deriving instance NFData PTactic'
 !-}
-
 instance Sized a => Sized (PTactic' a) where
   size (Intro nms) = 1 + size nms
   size Intros = 1
@@ -1012,17 +1022,20 @@ piBindp p ((n, ty):ns) t = PPi p n ty (piBindp p ns t)
 
 -- Pretty-printing declarations and terms
 
+-- These "show" instances render to an absurdly wide screen because inserted line breaks
+-- could interfere with interactive editing, which calls "show".
+
 instance Show PTerm where
-  showsPrec _ tm = (displayS . renderCompact . prettyImp False) tm
+  showsPrec _ tm = (displayS . renderPretty 1.0 10000000 . prettyImp False) tm
 
 instance Show PDecl where
-  showsPrec _ d = (displayS . renderCompact . showDeclImp False) d
+  showsPrec _ d = (displayS . renderPretty 1.0 10000000 . showDeclImp False) d
 
 instance Show PClause where
-  showsPrec _ c = (displayS . renderCompact . showCImp True) c
+  showsPrec _ c = (displayS . renderPretty 1.0 10000000 . showCImp True) c
 
 instance Show PData where
-  showsPrec _ d = (displayS . renderCompact . showDImp False) d
+  showsPrec _ d = (displayS . renderPretty 1.0 10000000 . showDImp False) d
 
 instance Pretty PTerm OutputAnnotation where
   pretty = prettyImp False
@@ -1062,9 +1075,6 @@ pprintPTerm impl bnd = prettySe 10 bnd
   where
     prettySe :: Int -> [(Name, Bool)] -> PTerm -> Doc OutputAnnotation
     prettySe p bnd (PQuote r) =
-      if size r > breakingSize then
-        text "![" <> line <> pretty r <> text "]"
-      else
         text "![" <> pretty r <> text "]"
     prettySe p bnd (PPatvar fc n) = pretty n
     prettySe p bnd e
@@ -1072,35 +1082,23 @@ pprintPTerm impl bnd = prettySe 10 bnd
       | Just n <- snat p e = annotate AnnConstData (text (show n))
     prettySe p bnd (PRef fc n) = prettyName impl bnd n
     prettySe p bnd (PLam n ty sc) =
-      bracket p 2 $
-        if size sc > breakingSize then
-          text "\\" <> bindingOf n False <+> text "=>" <> line <> prettySe 10 ((n, False):bnd) sc
-        else
-          text "\\" <> bindingOf n False <+> text "=>" <+> prettySe 10 ((n, False):bnd) sc
+      bracket p 2 . group . align . hang 2 $
+      text "\\" <> bindingOf n False <+> text "=>" <$>
+      prettySe 10 ((n, False):bnd) sc
     prettySe p bnd (PLet n ty v sc) =
       bracket p 2 $
-        if size sc > breakingSize then
-          text "let" <+> bindingOf n False <+> text "=" <+> prettySe 10 bnd v <+> text "in" <>
-            nest nestingSize (prettySe 10 ((n, False):bnd) sc)
-        else
-          text "let" <+> bindingOf n False <+> text "=" <+> prettySe 10 bnd v <+> text "in" <+>
-            prettySe 10 ((n, False):bnd) sc
+      text "let" <+> bindingOf n False <+> text "=" </>
+      prettySe 10 bnd v <+> text "in" </>
+      prettySe 10 ((n, False):bnd) sc
     prettySe p bnd (PPi (Exp l s _ _) n ty sc)
       | n `elem` allNamesIn sc || impl =
           let open = if Lazy `elem` l then text "|" <> lparen else lparen in
-            bracket p 2 $
-              if size sc > breakingSize then
-                enclose open rparen (bindingOf n False <+> colon <+> prettySe 10 bnd ty) <+>
-                  st <> text "->" <> line <> prettySe 10 ((n, False):bnd) sc
-              else
-                enclose open rparen (bindingOf n False <+> colon <+> prettySe 10 bnd ty) <+>
-                 st <> text "->" <+> prettySe 10 ((n, False):bnd) sc
+            bracket p 2 . group $
+            enclose open rparen (group . align $ bindingOf n False <+> colon <+> prettySe 10 bnd ty) <+>
+            st <> text "->" <$> prettySe 10 ((n, False):bnd) sc
       | otherwise                      =
-          bracket p 2 $
-            if size sc > breakingSize then
-              prettySe 0 bnd ty <+> st <> text "->" <> line <> prettySe 10 ((n, False):bnd) sc
-            else
-              prettySe 0 bnd ty <+> st <> text "->" <+> prettySe 10 ((n, False):bnd) sc
+          bracket p 2 . group $
+          group (prettySe 0 bnd ty <+> st) <> text "->" <$> group (prettySe 10 ((n, False):bnd) sc)
       where
         st =
           case s of
@@ -1110,12 +1108,8 @@ pprintPTerm impl bnd = prettySe 10 bnd
       | impl =
           let open = if Lazy `elem` l then text "|" <> lbrace else lbrace in
             bracket p 2 $
-              if size sc > breakingSize then
-                open <> bindingOf n True <+> colon <+> prettySe 10 bnd ty <> rbrace <+>
-                  st <> text "->" <+> prettySe 10 ((n, True):bnd) sc
-              else
-                open <> bindingOf n True <+> colon <+> prettySe 10 bnd ty <> rbrace <+>
-                  st <> text "->" <+> prettySe 10 ((n, True):bnd) sc
+            open <> bindingOf n True <+> colon <+> prettySe 10 bnd ty <> rbrace <+>
+            st <> text "->" </> prettySe 10 ((n, True):bnd) sc
       | otherwise = prettySe 10 ((n, True):bnd) sc
       where
         st =
@@ -1124,18 +1118,11 @@ pprintPTerm impl bnd = prettySe 10 bnd
             _      -> empty
     prettySe p bnd (PPi (Constraint _ _ _) n ty sc) =
       bracket p 2 $
-        if size sc > breakingSize then
-          prettySe 10 bnd ty <+> text "=>" <+> prettySe 10 ((n, True):bnd) sc
-        else
-          prettySe 10 bnd ty <+> text "=>" <> line <> prettySe 10 ((n, True):bnd) sc
+      prettySe 10 bnd ty <+> text "=>" </> prettySe 10 ((n, True):bnd) sc
     prettySe p bnd (PPi (TacImp _ _ s _) n ty sc) =
       bracket p 2 $
-        if size sc > breakingSize then
-          lbrace <> text "tacimp" <+> bindingOf n True <+> colon <+> prettySe 10 bnd ty <>
-            rbrace <+> text "->" <> line <> prettySe 10 ((n, True):bnd) sc
-        else
-          lbrace <> text "tacimp" <+> pretty n <+> colon <+> prettySe 10 bnd ty <>
-            rbrace <+> text "->" <+> prettySe 10 ((n, True):bnd) sc
+      lbrace <> text "tacimp" <+> pretty n <+> colon <+> prettySe 10 bnd ty <>
+      rbrace <+> text "->" </> prettySe 10 ((n, True):bnd) sc
     prettySe p bnd (PApp _ (PRef _ f) [])
       | not impl = prettyName impl bnd f
     prettySe p bnd (PAppBind _ (PRef _ f) [])
@@ -1145,11 +1132,8 @@ pprintPTerm impl bnd = prettySe 10 bnd
       , not (tnull nm) &&
         length (getExps args) == 2 && (not impl) && (not $ isAlpha (thead nm)) =
           let [l, r] = getExps args in
-            bracket p 1 $
-              if size r > breakingSize then
-                prettySe 1 bnd l <+> prettyName impl bnd op <> line <> prettySe 0 bnd r
-              else
-                prettySe 1 bnd l <+> prettyName impl bnd op <+> prettySe 0 bnd r
+            bracket p 1 . align . group $
+            (prettySe 1 bnd l <+> prettyName impl bnd op) <$> group (prettySe 0 bnd r)
     prettySe p bnd (PApp _ hd@(PRef fc f) [tm])
       | PConstant (Idris.Core.TT.Str str) <- getTm tm,
         f == sUN "Symbol_" = char '\'' <> prettySe 10 bnd (PRef fc (sUN str))
@@ -1157,10 +1141,14 @@ pprintPTerm impl bnd = prettySe 10 bnd
       let args = getExps as
           fp   = prettySe 1 bnd f
       in
-        bracket p 1 $
-          hsep (if impl
-                  then fp : map (prettyArgS bnd) as
-                  else fp : map (prettyArgSe bnd) args)
+        bracket p 1 . group $
+          if impl
+            then if null as
+                   then fp
+                   else fp <+> align (vsep (map (prettyArgS bnd) as))
+            else if null args
+                   then fp
+                   else fp <+> align (vsep (map (prettyArgSe bnd) args))
     prettySe p bnd (PCase _ scr opts) =
       text "case" <+> prettySe 10 bnd scr <+> text "of" <> prettyBody
       where
@@ -1170,35 +1158,35 @@ pprintPTerm impl bnd = prettySe 10 bnd
     prettySe p bnd (PHidden tm) = text "." <> prettySe 0 bnd tm
     prettySe p bnd (PRefl _ _) = annotate (AnnName eqCon Nothing Nothing) $ text "refl"
     prettySe p bnd (PResolveTC _) = text "resolvetc"
-    prettySe p bnd (PTrue _) = annotate (AnnName unitTy Nothing Nothing) $ text "()"
+    prettySe p bnd (PTrue _ IsType) = annotate (AnnName unitTy Nothing Nothing) $ text "()"
+    prettySe p bnd (PTrue _ IsTerm) = annotate (AnnName unitCon Nothing Nothing) $ text "()"
+    prettySe p bnd (PTrue _ TypeOrTerm) = text "()"
     prettySe p bnd (PFalse _) = annotate (AnnName falseTy Nothing Nothing) $ text "_|_"
     prettySe p bnd (PEq _ l r) =
-      bracket p 2 $
-        if size r > breakingSize then
-          prettySe 10 bnd l <+> eq <$> nest nestingSize (prettySe 10 bnd r)
-        else
-          prettySe 10 bnd l <+> eq <+> prettySe 10 bnd r
+      bracket p 2 . align . group $
+      prettySe 10 bnd l <+> eq <$> group (prettySe 10 bnd r)
       where eq = annotate (AnnName eqTy Nothing Nothing) (text "=")
     prettySe p bnd (PRewrite _ l r _) =
       bracket p 2 $
-        if size r > breakingSize then
-          text "rewrite" <+> prettySe 10 bnd l <+> text "in" <> nest nestingSize (prettySe 10 bnd r)
-        else
-          text "rewrite" <+> prettySe 10 bnd l <+> text "in" <+> prettySe 10 bnd r
+      text "rewrite" <+> prettySe 10 bnd l <+> text "in" <+> prettySe 10 bnd r
     prettySe p bnd (PTyped l r) =
       lparen <> prettySe 10 bnd l <+> colon <+> prettySe 10 bnd r <> rparen
-    prettySe p bnd (PPair _ l r) =
-      if size r > breakingSize then
-        lparen <> prettySe 10 bnd l <> text "," <>
-          line <> prettySe 10 bnd r <> rparen
-      else
-        lparen <> prettySe 10 bnd l <> text "," <+> prettySe 10 bnd r <> rparen
+    prettySe p bnd (PPair _ TypeOrTerm l r) =
+      lparen <> prettySe 10 bnd l <> text "," <+> prettySe 10 bnd r <> rparen
+    prettySe p bnd (PPair _ IsType l r) =
+      annotate (AnnName pairTy Nothing Nothing) lparen <>
+      prettySe 10 bnd l <>
+      annotate (AnnName pairTy Nothing Nothing) comma <+>
+      prettySe 10 bnd r <>
+      annotate (AnnName pairTy Nothing Nothing) rparen
+    prettySe p bnd (PPair _ IsTerm l r) =
+      annotate (AnnName pairCon Nothing Nothing) lparen <>
+      prettySe 10 bnd l <>
+      annotate (AnnName pairCon Nothing Nothing) comma <+>
+      prettySe 10 bnd r <>
+      annotate (AnnName pairCon Nothing Nothing) rparen
     prettySe p bnd (PDPair _ l t r) =
-      if size r > breakingSize then
-        lparen <> prettySe 10 bnd l <+> text "**" <>
-          line <> prettySe 10 bnd r <> rparen
-      else
-        lparen <> prettySe 10 bnd l <+> text "**" <+> prettySe 10 bnd r <> rparen
+      lparen <> prettySe 10 bnd l <+> text "**" <+> prettySe 10 bnd r <> rparen
     prettySe p bnd (PAlternative a as) =
       lparen <> text "|" <> prettyAs <> text "|" <> rparen
         where
@@ -1241,6 +1229,8 @@ pprintPTerm impl bnd = prettySe 10 bnd
 
     slist' p bnd (PApp _ (PRef _ nil) _)
       | not impl && nsroot nil == sUN "Nil" = Just []
+    slist' p bnd (PRef _ nil)
+      | not impl && nsroot nil == sUN "Nil" = Just []
     slist' p bnd (PApp _ (PRef _ cons) args)
       | nsroot cons == sUN "::",
         (PExp {getTm=tl}):(PExp {getTm=hd}):imps <- reverse args,
@@ -1250,14 +1240,16 @@ pprintPTerm impl bnd = prettySe 10 bnd
       where
         isImp (PImp {}) = True
         isImp _ = False
-    slist' _ _ _ = Nothing
+    slist' _ _ tm = Nothing
 
     slist p bnd e | Just es <- slist' p bnd e = Just $
       case es of [] -> annotate AnnConstData $ text "[]"
-                 [x] -> enclose left
-                                right
-                                (prettySe p bnd x)
-                 xs -> (enclose left right . hsep . punctuate comma . map (prettySe p bnd)) xs
+                 [x] -> enclose left right . group $
+                        prettySe p bnd x
+                 xs -> (enclose left right .
+                        align . group . vsep .
+                        punctuate comma .
+                        map (prettySe p bnd)) xs
       where left  = (annotate AnnConstData (text "["))
             right = (annotate AnnConstData (text "]"))
             comma = (annotate AnnConstData (text ","))
@@ -1406,13 +1398,13 @@ instance Sized PTerm where
   size (PApp fc name args) = 1 + size args
   size (PAppBind fc name args) = 1 + size args
   size (PCase fc trm bdy) = 1 + size trm + size bdy
-  size (PTrue fc) = 1
+  size (PTrue fc _) = 1
   size (PFalse fc) = 1
   size (PRefl fc _) = 1
   size (PResolveTC fc) = 1
   size (PEq fc left right) = 1 + size left + size right
   size (PRewrite fc left right _) = 1 + size left + size right
-  size (PPair fc left right) = 1 + size left + size right
+  size (PPair fc _ left right) = 1 + size left + size right
   size (PDPair fs left ty right) = 1 + size left + size ty + size right
   size (PAlternative a alts) = 1 + size alts
   size (PHidden hidden) = size hidden
@@ -1451,7 +1443,7 @@ allNamesIn tm = nub $ ni [] tm
     ni env (PEq _ l r)     = ni env l ++ ni env r
     ni env (PRewrite _ l r _) = ni env l ++ ni env r
     ni env (PTyped l r)    = ni env l ++ ni env r
-    ni env (PPair _ l r)   = ni env l ++ ni env r
+    ni env (PPair _ _ l r)   = ni env l ++ ni env r
     ni env (PDPair _ (PRef _ n) t r)  = ni env t ++ ni (n:env) r
     ni env (PDPair _ l t r)  = ni env l ++ ni env t ++ ni env r
     ni env (PAlternative a ls) = concatMap (ni env) ls
@@ -1473,7 +1465,7 @@ boundNamesIn tm = nub $ ni tm
     ni (PEq _ l r)     = ni l ++ ni r
     ni (PRewrite _ l r _) = ni l ++ ni r
     ni (PTyped l r)    = ni l ++ ni r
-    ni (PPair _ l r)   = ni l ++ ni r
+    ni (PPair _ _ l r)   = ni l ++ ni r
     ni (PDPair _ (PRef _ n) t r) = ni t ++ ni r
     ni (PDPair _ l t r) = ni l ++ ni t ++ ni r
     ni (PAlternative a as) = concatMap (ni) as
@@ -1500,7 +1492,7 @@ namesIn uvars ist tm = nub $ ni [] tm
     ni env (PEq _ l r)     = ni env l ++ ni env r
     ni env (PRewrite _ l r _) = ni env l ++ ni env r
     ni env (PTyped l r)    = ni env l ++ ni env r
-    ni env (PPair _ l r)   = ni env l ++ ni env r
+    ni env (PPair _ _ l r)   = ni env l ++ ni env r
     ni env (PDPair _ (PRef _ n) t r) = ni env t ++ ni (n:env) r
     ni env (PDPair _ l t r) = ni env l ++ ni env t ++ ni env r
     ni env (PAlternative a as) = concatMap (ni env) as
@@ -1528,7 +1520,7 @@ usedNamesIn vars ist tm = nub $ ni [] tm
     ni env (PEq _ l r)     = ni env l ++ ni env r
     ni env (PRewrite _ l r _) = ni env l ++ ni env r
     ni env (PTyped l r)    = ni env l ++ ni env r
-    ni env (PPair _ l r)   = ni env l ++ ni env r
+    ni env (PPair _ _ l r)   = ni env l ++ ni env r
     ni env (PDPair _ (PRef _ n) t r) = ni env t ++ ni (n:env) r
     ni env (PDPair _ l t r) = ni env l ++ ni env t ++ ni env r
     ni env (PAlternative a as) = concatMap (ni env) as

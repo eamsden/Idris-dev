@@ -46,8 +46,8 @@ delabTy' ist imps tm fullname mvs = de [] imps tm
     de env _ (App f a) = deFn env f [a]
     de env _ (V i)     | i < length env = PRef un (snd (env!!i))
                        | otherwise = PRef un (sUN ("v" ++ show i ++ ""))
-    de env _ (P _ n _) | n == unitTy = PTrue un
-                       | n == unitCon = PTrue un
+    de env _ (P _ n _) | n == unitTy = PTrue un IsType
+                       | n == unitCon = PTrue un IsTerm
                        | n == falseTy = PFalse un
                        | Just n' <- lookup n env = PRef un n'
                        | otherwise
@@ -83,7 +83,7 @@ delabTy' ist imps tm fullname mvs = de [] imps tm
 
     deFn env (App f a) args = deFn env f (a:args)
     deFn env (P _ n _) [l,r]
-         | n == pairTy    = PPair un (de env [] l) (de env [] r)
+         | n == pairTy    = PPair un IsType (de env [] l) (de env [] r)
          | n == eqCon     = PRefl un (de env [] r)
          | n == sUN "lazy" = de env [] r
     deFn env (P _ n _) [ty, Bind x (Lam _) r]
@@ -91,7 +91,7 @@ delabTy' ist imps tm fullname mvs = de [] imps tm
                = PDPair un (PRef un x) (de env [] ty)
                            (de ((x,x):env) [] (instantiate (P Bound x ty) r))
     deFn env (P _ n _) [_,_,l,r]
-         | n == pairCon = PPair un (de env [] l) (de env [] r)
+         | n == pairCon = PPair un IsTerm (de env [] l) (de env [] r)
          | n == eqTy    = PEq un (de env [] l) (de env [] r)
          | n == sUN "Ex_intro" = PDPair un (de env [] l) Placeholder
                                            (de env [] r)
@@ -152,17 +152,17 @@ pprintErr' i (CantUnify _ x y e sc s) =
          indented (pprintErr' i e) <>
          if (opt_errContext (idris_options i)) then text $ showSc i sc else empty
 pprintErr' i (CantConvert x y env) =
-  text "Can't convert" <> indented (pprintTerm i (delab i x)) <>
+  text "Can't convert" <> indented (pprintTerm i (delab i x)) <$>
   text "with" <> indented (pprintTerm i (delab i y)) <>
-  if (opt_errContext (idris_options i)) then text (showSc i env) else empty
+  if (opt_errContext (idris_options i)) then line <> text (showSc i env) else empty
 pprintErr' i (CantSolveGoal x env) =
   text "Can't solve goal " <> indented (pprintTerm i (delab i x)) <>
-  if (opt_errContext (idris_options i)) then text (showSc i env) else empty
+  if (opt_errContext (idris_options i)) then line <> text (showSc i env) else empty
 pprintErr' i (UnifyScope n out tm env) =
   text "Can't unify" <> indented (annName n) <+>
   text "with" <> indented (pprintTerm i (delab i tm)) <+>
   text "as" <> indented (annName out) <> text "is not in scope" <>
-  if (opt_errContext (idris_options i)) then text (showSc i env) else empty
+  if (opt_errContext (idris_options i)) then line <> text (showSc i env) else empty
 pprintErr' i (CantInferType t) = text "Can't infer type for" <+> text t
 pprintErr' i (NonFunctionType f ty) =
   pprintTerm i (delab i f) <+>
@@ -178,7 +178,7 @@ pprintErr' i (CantIntroduce ty) =
 pprintErr' i (InfiniteUnify x tm env) =
   text "Unifying" <+> annName' x (showbasic x) <+> text "and" <+> pprintTerm i (delab i tm) <+>
   text "would lead to infinite value" <>
-  if (opt_errContext (idris_options i)) then text (showSc i env) else empty
+  if (opt_errContext (idris_options i)) then line <> text (showSc i env) else empty
 pprintErr' i (NotInjective p x y) =
   text "Can't verify injectivity of" <+> pprintTerm i (delab i p) <+>
   text " when unifying" <+> pprintTerm i (delab i x) <+> text "and" <+>

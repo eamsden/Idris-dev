@@ -191,13 +191,8 @@ instance Show Err where
 instance Pretty Err OutputAnnotation where
   pretty (Msg m) = text m
   pretty (CantUnify _ l r e _ i) =
-    if size l + size r > breakingSize then
-      text "Cannot unify" <+> colon <+>
-        nest nestingSize (pretty l <+> text "and" <+> pretty r) <+>
-        nest nestingSize (text "where" <+> pretty e <+> text "with" <+> (text . show $ i))
-    else
       text "Cannot unify" <+> colon <+> pretty l <+> text "and" <+> pretty r <+>
-        nest nestingSize (text "where" <+> pretty e <+> text "with" <+> (text . show $ i))
+      nest nestingSize (text "where" <+> pretty e <+> text "with" <+> (text . show $ i))
   pretty (ProviderError msg) = text msg
   pretty err@(LoadingFailed _ _) = text (show err)
   pretty _ = text "Error"
@@ -210,10 +205,7 @@ type TC = TC' Err
 instance (Pretty a OutputAnnotation) => Pretty (TC a) OutputAnnotation where
   pretty (OK ok) = pretty ok
   pretty (Error err) =
-    if size err > breakingSize then
-      text "Error" <+> colon <+> (nest nestingSize $ pretty err)
-    else
-      text "Error" <+> colon <+> pretty err
+    text "Error" <+> colon <+> pretty err
 
 instance Show a => Show (TC a) where
     show (OK x) = show x
@@ -442,6 +434,13 @@ data IntTy = ITFixed NativeTy | ITNative | ITBig | ITChar
            | ITVec NativeTy Int
     deriving (Show, Eq, Ord)
 
+intTyName :: IntTy -> String
+intTyName ITNative = "Int"
+intTyName ITBig = "BigInt"
+intTyName (ITFixed sized) = "B" ++ show (nativeTyWidth sized)
+intTyName (ITChar) = "Char"
+intTyName (ITVec ity count) = "B" ++ show (nativeTyWidth ity) ++ "x" ++ show count
+
 data ArithTy = ATInt IntTy | ATFloat -- TODO: Float vectors
     deriving (Show, Eq, Ord)
 {-!
@@ -476,7 +475,7 @@ data Const = I Int | BI Integer | Fl Double | Ch Char | Str String
            | B8V (Vector Word8) | B16V (Vector Word16)
            | B32V (Vector Word32) | B64V (Vector Word64)
            | AType ArithTy | StrType
-           | PtrType | VoidType | Forgot
+           | PtrType | BufferType | VoidType | Forgot
   deriving (Eq, Ord)
 {-!
 deriving instance Binary Const
@@ -494,6 +493,7 @@ instance Pretty Const OutputAnnotation where
   pretty (Str s) = text s
   pretty (AType a) = pretty a
   pretty StrType = text "String"
+  pretty BufferType = text "prim__UnsafeBuffer"
   pretty PtrType = text "Ptr"
   pretty VoidType = text "Void"
   pretty Forgot = text "Forgot"
@@ -1039,6 +1039,7 @@ instance Show Const where
     show (AType (ATInt (ITFixed it))) = itBitsName it
     show (AType (ATInt (ITVec it c))) = itBitsName it ++ "x" ++ show c
     show StrType = "String"
+    show BufferType = "prim__UnsafeBuffer"
     show PtrType = "Ptr"
     show VoidType = "Void"
 

@@ -146,18 +146,21 @@ scopeE e
 
 dumpState :: IState -> ProofState -> Idris ()
 dumpState ist (PS nm [] _ _ tm _ _ _ _ _ _ _ _ _ _ _ _ _ _) =
-  iputGoal . renderPretty 0.7 breakingSize $
-    prettyName False [] nm <> colon <+> text "No more goals."
+  do rendered <- iRender $ prettyName False [] nm <> colon <+> text "No more goals."
+     iputGoal rendered
 dumpState ist ps@(PS nm (h:hs) _ _ tm _ _ _ _ _ _ problems i _ _ ctxy _ _ _) = do
   let OK ty  = goalAtFocus ps
   let OK env = envAtFocus ps
-  iputGoal . renderPretty 0.7 breakingSize $
-    prettyOtherGoals hs <> line <>
-    prettyAssumptions env <> line <>
-    prettyGoal (zip (assumptionNames env) (repeat False)) ty
+  let state = prettyOtherGoals hs <> line <>
+              prettyAssumptions env <> line <>
+              prettyGoal (zip (assumptionNames env) (repeat False)) ty
+  rendered <- iRender state
+  iputGoal rendered
+
   where
-    -- XXX
-    tPretty bnd t = pprintPTerm True bnd $ delab ist t
+    showImplicits = opt_showimp (idris_options ist)
+
+    tPretty bnd t = pprintPTerm showImplicits bnd $ delab ist t
 
     assumptionNames :: Env -> [Name]
     assumptionNames = map fst
@@ -170,14 +173,14 @@ dumpState ist ps@(PS nm (h:hs) _ _ tm _ _ _ _ _ _ problems i _ _ ctxy _ _ _) = d
       nest nestingSize (bindingOf n False <+> text "=" <+> tPretty bnd v <> colon <+>
         tPretty ((n, False):bnd) t <> line <> prettyPs ((n, False):bnd) bs)
     prettyPs bnd ((n, b) : bs) =
-      line <> bindingOf n False <+> colon <+> tPretty bnd (binderTy b) <> prettyPs ((n, False):bnd) bs
+      line <> bindingOf n False <+> colon <+> align (tPretty bnd (binderTy b)) <> prettyPs ((n, False):bnd) bs
 
     prettyG bnd (Guess t v) = tPretty bnd t <+> text "=?=" <+> tPretty bnd v
     prettyG bnd b = tPretty bnd $ binderTy b
 
     prettyGoal bnd ty =
       text "----------                 Goal:                  ----------" <$$>
-      bindingOf h False <+> colon <+> nest nestingSize (prettyG bnd ty)
+      bindingOf h False <+> colon <+> align (prettyG bnd ty)
 
     prettyAssumptions env =
       if length env == 0 then
@@ -233,10 +236,10 @@ ploop d prompt prf e h
                   i <- receiveInput e
                   return (i, h)
          (cmd, step) <- case x of
-            Nothing -> do iPrintError ""; fail "Abandoned"
+            Nothing -> do iPrintError ""; ifail "Abandoned"
             Just input -> do return (parseTactic i input, input)
          case cmd of
-            Success Abandon -> do iPrintError ""; fail "Abandoned"
+            Success Abandon -> do iPrintError ""; ifail "Abandoned"
             _ -> return ()
          (d, st, done, prf') <- idrisCatch
            (case cmd of

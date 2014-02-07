@@ -70,8 +70,14 @@ Expr' ::=  "External (User-defined) Syntax"
       |   InternalExpr;
 @
  -}
-expr' :: SyntaxInfo -> IdrisParser PTerm
-expr' syn =     try (externalExpr syn)
+expr' syn = doexpr' syn
+--    = do l <- restOfLine
+--         f <- getFC
+--         e <- trace (show (f, l)) $ doexpr' syn
+--         return e
+
+doexpr' :: SyntaxInfo -> IdrisParser PTerm
+doexpr' syn =     try (externalExpr syn)
             <|> internalExpr syn
             <?> "expression"
 
@@ -151,7 +157,7 @@ extension syn (Rule ssym ptm _)
     update ns (PApp fc t args) = PApp fc (update ns t) (map (fmap (update ns)) args)
     update ns (PAppBind fc t args) = PAppBind fc (update ns t) (map (fmap (update ns)) args)
     update ns (PCase fc c opts) = PCase fc (update ns c) (map (pmap (update ns)) opts)
-    update ns (PPair fc l r) = PPair fc (update ns l) (update ns r)
+    update ns (PPair fc p l r) = PPair fc p (update ns l) (update ns r)
     update ns (PDPair fc l t r) = PDPair fc (update ns l) (update ns t) (update ns r)
     update ns (PAlternative a as) = PAlternative a (map (update ns) as)
     update ns (PHidden t) = PHidden (update ns t)
@@ -181,6 +187,7 @@ InternalExpr ::=
   | Let
   | RewriteTerm
   | Pi
+  | CaseExpr
   | DoBlock
   ;
 @
@@ -199,6 +206,7 @@ internalExpr syn =
      <|> rewriteTerm syn
      <|> try(pi syn)
      <|> doBlock syn
+     <|> caseExpr syn
      <|> simpleExpr syn
      <?> "expression"
 
@@ -263,7 +271,6 @@ SimpleExpr ::=
   | 'refl' ('{' Expr '}')?
   | ProofExpr
   | TacticsExpr
-  | CaseExpr
   | FnName
   | List
   | Comprehension
@@ -290,7 +297,6 @@ simpleExpr syn =
         <|> do reserved "elim_for"; fc <- getFC; t <- fnName; return (PRef fc (SN $ ElimN t))
         <|> proofExpr syn
         <|> tacticsExpr syn
-        <|> caseExpr syn
         <|> do reserved "Type"; return PType
         <|> try (do c <- constant
                     fc <- getFC
@@ -336,49 +342,53 @@ bracketed :: SyntaxInfo -> IdrisParser PTerm
 bracketed syn =
             do lchar ')'
                fc <- getFC
-               return $ PTrue fc
-        <|>
-        try (do l <- expr syn
-                lchar ')'
-                return l)
-        <|>  do (l, fc) <- try (do
-                     l <- expr syn
-                     fc <- getFC
-                     lchar ','
-                     return (l, fc))
-                rs <- sepBy1 (do fc' <- getFC; r <- expr syn; return (r, fc')) (lchar ',')
-                lchar ')'
-                return $ PPair fc l (mergePairs rs)
-        <|>  do (l, fc) <- try (do
-                   l <- expr syn
-                   fc <- getFC
-                   reservedOp "**"
-                   return (l, fc))
-                r <- expr syn
-                lchar ')'
-                return (PDPair fc l Placeholder r)
-        <|> try(do fc0 <- getFC
-                   l <- expr' syn
-                   o <- operator
-                   lchar ')'
-                   return $ PLam (sMN 1000 "ARG") Placeholder
-                                    (PApp fc0 (PRef fc0 (sUN o)) [pexp l,
-                                                                 pexp (PRef fc0 (sMN 1000 "ARG"))]))
-        <|> try(do fc <- getFC; o <- operator; e <- expr syn; lchar ')'
-                   return $ PLam (sMN 1000 "ARG") Placeholder
-                             (PApp fc (PRef fc (sUN o)) [pexp (PRef fc (sMN 1000 "ARG")),
-                                                             pexp e]))
-        <|> try (do ln <- name; lchar ':'
+               return $ PTrue fc TypeOrTerm
+        <|> try (do ln <- name; lchar ':';
                     lty <- expr syn
                     reservedOp "**"
                     fc <- getFC
                     r <- expr syn
                     lchar ')'
                     return (PDPair fc (PRef fc ln) lty r))
-        <?> "end of braced expression"
+        <|> try (do fc <- getFC; o <- operator; e <- expr syn; lchar ')'
+                    -- No prefix operators! (bit of a hack here...)
+                    if (o == "-" || o == "!") 
+                      then fail "minus not allowed in section"
+                      else return $ PLam (sMN 1000 "ARG") Placeholder
+                         (PApp fc (PRef fc (sUN o)) [pexp (PRef fc (sMN 1000 "ARG")),
+                                                     pexp e]))
+        <|> try (do l <- simpleExpr syn
+                    op <- option Nothing (do o <- operator
+                                             lchar ')'
+                                             return (Just o)) 
+                    fc0 <- getFC
+                    case op of
+                         Nothing -> bracketedExpr syn l
+                         Just o -> return $ PLam (sMN 1000 "ARG") Placeholder
+                             (PApp fc0 (PRef fc0 (sUN o)) [pexp l,
+                                                           pexp (PRef fc0 (sMN 1000 "ARG"))]))
+        <|> do l <- expr syn
+               bracketedExpr syn l
+            
+bracketedExpr :: SyntaxInfo -> PTerm -> IdrisParser PTerm
+bracketedExpr syn e =
+             do lchar ')'; return e
+        <|>  do fc <- do fc <- getFC
+                         lchar ','
+                         return fc
+                rs <- sepBy1 (do fc' <- getFC; r <- expr syn; return (r, fc')) (lchar ',')
+                lchar ')'
+                return $ PPair fc TypeOrTerm e (mergePairs rs)
+        <|>  do fc <- do fc <- getFC
+                         reservedOp "**"
+                         return fc
+                r <- expr syn
+                lchar ')'
+                return (PDPair fc e Placeholder r)
+        <?> "end of bracketed expression"
   where mergePairs :: [(PTerm, FC)] -> PTerm
         mergePairs [(t, fc)]    = t
-        mergePairs ((t, fc):rs) = PPair fc t (mergePairs rs)
+        mergePairs ((t, fc):rs) = PPair fc TypeOrTerm t (mergePairs rs)
 
 -- bit of a hack here. If the integer doesn't fit in an Int, treat it as a
 -- big integer, otherwise try fromInteger and the constants as alternatives.
@@ -992,6 +1002,7 @@ Constant ::=
   | 'Float'
   | 'String'
   | 'Ptr'
+  | 'prim__UnsafeBuffer'
   | 'Bits8'
   | 'Bits16'
   | 'Bits32'
@@ -1009,12 +1020,13 @@ Constant ::=
 @
 -}
 constant :: IdrisParser Idris.Core.TT.Const
-constant =  do reserved "Integer";return (AType (ATInt ITBig))
-        <|> do reserved "Int";    return (AType (ATInt ITNative))
-        <|> do reserved "Char";   return (AType (ATInt ITChar))
-        <|> do reserved "Float";  return (AType ATFloat)
-        <|> do reserved "String"; return StrType
-        <|> do reserved "Ptr";    return PtrType
+constant =  do reserved "Integer";      return (AType (ATInt ITBig))
+        <|> do reserved "Int";          return (AType (ATInt ITNative))
+        <|> do reserved "Char";         return (AType (ATInt ITChar))
+        <|> do reserved "Float";        return (AType ATFloat)
+        <|> do reserved "String";       return StrType
+        <|> do reserved "Ptr";          return PtrType
+        <|> do reserved "prim__UnsafeBuffer"; return BufferType
         <|> do reserved "Bits8";  return (AType (ATInt (ITFixed IT8)))
         <|> do reserved "Bits16"; return (AType (ATInt (ITFixed IT16)))
         <|> do reserved "Bits32"; return (AType (ATInt (ITFixed IT32)))
@@ -1152,6 +1164,7 @@ tactic syn = do reserved "intro"; ns <- sepBy (indentPropHolds gtProp *> name) (
                  return $ TSeq t (mergeSeq ts)
           <|> do reserved "compute"; return Compute
           <|> do reserved "trivial"; return Trivial
+          <|> do reserved "instance"; return TCInstance
           <|> do reserved "solve"; return Solve
           <|> do reserved "attack"; return Attack
           <|> do reserved "state"; return ProofState

@@ -99,6 +99,7 @@ pCmd = do P.whiteSpace; try (do cmd ["q", "quit"]; eof; return Quit)
               <|> try (do cmd ["errorhandlers"]; eof ; return ListErrorHandlers)
               <|> try (do cmd ["ci", "compatibleidentifiers"]; mv <- P.name; return (ListCompatibleIdentifiers mv))
               <|> try (do cmd ["gre", "generaterefinedexpression"]; mv <- P.name; x <- P.identifier; return (GenerateRefinedExpression mv x))
+              <|> try (do cmd ["consolewidth"]; w <- pConsoleWidth ; return (SetConsoleWidth w))
               <|> do P.whiteSpace; do eof; return NOP
                              <|> do t <- P.fullExpr defaultSyntax; return (Eval t)
 
@@ -108,6 +109,11 @@ pOption :: P.IdrisParser Opt
 pOption = do discard (P.symbol "errorcontext"); return ErrContext
       <|> do discard (P.symbol "showimplicits"); return ShowImpl
       <|> do discard (P.symbol "originalerrors"); return ShowOrigErr
+
+pConsoleWidth :: P.IdrisParser ConsoleWidth
+pConsoleWidth = do discard (P.symbol "auto"); return AutomaticWidth
+            <|> do discard (P.symbol "infinite"); return InfinitelyWide
+            <|> do n <- fmap fromInteger P.natural; return (ColsWide n)
 
 colours :: [(String, Maybe Color)]
 colours = [ ("black", Just Black)

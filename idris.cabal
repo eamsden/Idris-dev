@@ -1,5 +1,5 @@
 Name:           idris
-Version:        0.9.10.1
+Version:        0.9.11.1
 License:        BSD3
 License-file:   LICENSE
 Author:         Edwin Brady
@@ -55,6 +55,7 @@ Data-files:            jsrts/Runtime-browser.js
                        rts/idris_gmp.h
                        rts/idris_main.c
                        rts/idris_rts.h
+                       rts/idris_net.h
                        rts/idris_stdfgn.h
                        rts/libtest.c
 
@@ -77,6 +78,7 @@ Extra-source-files:
                        libs/base/base.ipkg
                        libs/base/*.idr
                        libs/base/Control/*.idr
+                       libs/base/Control/Isomorphism/*.idr
                        libs/base/Control/Monad/*.idr
                        libs/base/Data/*.idr
                        libs/base/Data/Vect/*.idr
@@ -206,6 +208,9 @@ Extra-source-files:
                        test/reg032/run
                        test/reg032/*.idr
                        test/reg032/expected
+                       test/reg033/run
+                       test/reg033/*.idr
+                       test/reg033/expected
 
                        test/basic001/run
                        test/basic001/*.idr
@@ -235,6 +240,10 @@ Extra-source-files:
                        test/basic009/*.idr
                        test/basic009/expected
                        test/basic009/B/*.idr
+
+                       test/buffer001-disabled/*.idr
+                       test/buffer001-disabled/run
+                       test/buffer001-disabled/expected
 
                        test/dsl001/run
                        test/dsl001/*.idr
@@ -277,7 +286,6 @@ Extra-source-files:
                        test/ffi003/input
                        test/ffi004/run
                        test/ffi004/*.idr
-                       test/ffi004/input
                        test/ffi004/theType
                        test/ffi004/theOtherType
                        test/ffi004/expected
@@ -343,6 +351,9 @@ Extra-source-files:
                        test/totality002/run
                        test/totality002/*.idr
                        test/totality002/expected
+                       test/totality003/run
+                       test/totality003/*.idr
+                       test/totality003/expected
 
 source-repository head
   type:     git
@@ -360,6 +371,11 @@ Flag FFI
 
 Flag GMP
   Description:  Use GMP for Integers
+  Default:      False
+  manual:       True
+
+Flag curses
+  Description:  Use Curses to get the screen width
   Default:      False
   manual:       True
 
@@ -442,6 +458,7 @@ Library
 
                 , Pkg.Package
                 , Util.DynamicLinker
+                , Util.ScreenSize
 
   Other-modules:
                   Util.Pretty
@@ -522,6 +539,9 @@ Library
   if flag(GMP)
      build-depends: libffi
      cpp-options:   -DIDRIS_GMP
+  if flag(curses)
+     build-depends: hscurses
+     cpp-options:   -DCURSES
 
 Executable idris
   Main-is:        Main.hs

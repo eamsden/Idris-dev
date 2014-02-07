@@ -171,13 +171,13 @@ elab ist info pattern opts fn tm
           -> ElabD ()
     elab' ina (PNoImplicits t) = elab' ina t -- skip elabE step
     elab' ina PType           = do apply RType []; solve
-    elab' (_,_,inty) (PConstant c) 
-       | constType c && pattern && not reflect && not inty
-         = lift $ tfail (Msg "Typecase is not allowed") 
+--  elab' (_,_,inty) (PConstant c) 
+--     | constType c && pattern && not reflect && not inty
+--       = lift $ tfail (Msg "Typecase is not allowed") 
     elab' ina (PConstant c)  = do apply (RConstant c) []; solve
     elab' ina (PQuote r)     = do fill r; solve
-    elab' ina (PTrue fc)     = try (elab' ina (PRef fc unitCon))
-                                   (elab' ina (PRef fc unitTy))
+    elab' ina (PTrue fc _)   = try (elab' ina (PRef fc unitCon))
+                                    (elab' ina (PRef fc unitTy))
     elab' ina (PFalse fc)    = elab' ina (PRef fc falseTy)
     elab' ina (PResolveTC (FC "HACK" _ _)) -- for chasing parent classes
        = do g <- goal; resolveTC 5 g fn ist
@@ -195,7 +195,7 @@ elab ist info pattern opts fn tm
                                     [pimp (sMN 0 "A") Placeholder True,
                                      pimp (sMN 0 "B") Placeholder False,
                                      pexp l, pexp r])
-    elab' ina@(_, a, inty) (PPair fc l r)
+    elab' ina@(_, a, inty) (PPair fc _ l r)
         = do hnf_compute
              g <- goal
              case g of
@@ -245,9 +245,9 @@ elab ist info pattern opts fn tm
               trySeq' deferr (x : xs)
                   = try' (elab' ina x) (trySeq' deferr xs) True
     elab' ina (PPatvar fc n) | pattern = patvar n
-    elab' (_, _, inty) (PRef fc f)
-       | isTConName f (tt_ctxt ist) && pattern && not reflect && not inty
-          = lift $ tfail (Msg "Typecase is not allowed") 
+--    elab' (_, _, inty) (PRef fc f)
+--       | isTConName f (tt_ctxt ist) && pattern && not reflect && not inty
+--          = lift $ tfail (Msg "Typecase is not allowed") 
     elab' (ina, guarded, inty) (PRef fc n) | pattern && not (inparamBlock n)
         = do ctxt <- get_context
              let defined = case lookupTy n ctxt of
@@ -969,6 +969,7 @@ runTac autoSolve ist tac
                    when autoSolve solveAll
     runT Compute = compute
     runT Trivial = do trivial' ist; when autoSolve solveAll
+    runT TCInstance = runT (Exact (PResolveTC emptyFC))
     runT (ProofSearch top n hints)
          = do proofSearch' ist top n hints; when autoSolve solveAll
     runT (Focus n) = focus n
@@ -1088,6 +1089,7 @@ reflm n = sNS (sUN n) ["Reflection", "Language"]
 reify :: IState -> Term -> ElabD PTactic
 reify _ (P _ n _) | n == reflm "Intros" = return Intros
 reify _ (P _ n _) | n == reflm "Trivial" = return Trivial
+reify _ (P _ n _) | n == reflm "Instance" = return TCInstance
 reify _ (P _ n _) | n == reflm "Solve" = return Solve
 reify _ (P _ n _) | n == reflm "Compute" = return Compute
 reify ist t@(App _ _)

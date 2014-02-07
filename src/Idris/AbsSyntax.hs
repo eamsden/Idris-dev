@@ -36,6 +36,7 @@ import Control.Monad.Error (throwError, catchError)
 import System.IO.Error(isUserError, ioeGetErrorString, tryIOError)
 
 import Util.Pretty
+import Util.ScreenSize
 import Util.System
 
 getContext :: Idris Context
@@ -407,6 +408,37 @@ getUndefined :: Idris [Name]
 getUndefined = do i <- getIState
                   return (map fst (idris_metavars i) \\ primDefs)
 
+getWidth :: Idris ConsoleWidth
+getWidth = fmap idris_consolewidth getIState
+
+setWidth :: ConsoleWidth -> Idris ()
+setWidth w = do ist <- getIState
+                put ist { idris_consolewidth = w }
+
+renderWidth :: Idris Int
+renderWidth = do iw <- getWidth
+                 case iw of
+                   InfinitelyWide -> return 100000000
+                   ColsWide n -> return (max n 1)
+                   AutomaticWidth -> runIO getScreenWidth
+
+
+iRender :: Doc a -> Idris (SimpleDoc a)
+iRender d = do w <- getWidth
+               ist <- getIState
+               let ideSlave = case idris_outputmode ist of
+                                IdeSlave _ -> True
+                                _          -> False
+               case w of
+                 InfinitelyWide -> return $ renderPretty 1.0 1000000000 d
+                 ColsWide n -> return $
+                               if n < 1
+                                 then renderPretty 1.0 1000000000 d
+                                 else renderPretty 0.8 n d
+                 AutomaticWidth | ideSlave  -> return $ renderPretty 1.0 1000000000 d
+                                | otherwise -> do width <- runIO getScreenWidth
+                                                  return $ renderPretty 0.8 width d
+
 ihPrintResult :: Handle -> String -> Idris ()
 ihPrintResult h s = do i <- getIState
                        case idris_outputmode i of
@@ -420,18 +452,20 @@ ihPrintResult h s = do i <- getIState
 -- | Write a pretty-printed term to the console with semantic coloring
 consoleDisplayAnnotated :: Handle -> Doc OutputAnnotation -> Idris ()
 consoleDisplayAnnotated h output = do ist <- getIState
+                                      rendered <- iRender $ output
                                       runIO . hPutStrLn h .
-                                        displayDecorated (consoleDecorate ist) .
-                                        renderCompact $ output
+                                        displayDecorated (consoleDecorate ist) $
+                                        rendered
+
 
 -- | Write pretty-printed output to IDESlave with semantic annotations
 ideSlaveReturnAnnotated :: Integer -> Handle -> Doc OutputAnnotation -> Idris ()
 ideSlaveReturnAnnotated n h out = do ist <- getIState
-                                     let (str, spans) = displaySpans .
-                                                        renderCompact .
-                                                        fmap (fancifyAnnots ist) $
-                                                        out
-                                         good = [SymbolAtom "ok", toSExp str, toSExp spans]
+                                     (str, spans) <- fmap displaySpans .
+                                                     iRender .
+                                                     fmap (fancifyAnnots ist) $
+                                                     out
+                                     let good = [SymbolAtom "ok", toSExp str, toSExp spans]
                                      runIO . hPutStrLn h $ convSExp "return" good n
 
 ihPrintTermWithType :: Handle -> Doc OutputAnnotation -> Doc OutputAnnotation -> Idris ()
@@ -451,7 +485,13 @@ ihPrintFunTypes h n overloads = do imp <- impShow
                                      RawOutput -> consoleDisplayAnnotated h output
                                      IdeSlave n -> ideSlaveReturnAnnotated n h output
   where fullName n = annotate (AnnName n Nothing Nothing) $ text (show n)
-        ppOverload imp n tm = fullName n <+> colon <+> prettyImp imp tm
+        ppOverload imp n tm = fullName n <+> colon <+> align (prettyImp imp tm)
+
+ihRenderResult :: Handle -> Doc OutputAnnotation -> Idris ()
+ihRenderResult h d = do ist <- getIState
+                        case idris_outputmode ist of
+                          RawOutput -> consoleDisplayAnnotated h d
+                          IdeSlave n -> ideSlaveReturnAnnotated n h d
 
 fancifyAnnots :: IState -> OutputAnnotation -> OutputAnnotation
 fancifyAnnots ist annot@(AnnName n _ _) =
@@ -813,7 +853,7 @@ expandParams dec ps ns infs tm = en tm
     en (PEq f l r) = PEq f (en l) (en r)
     en (PRewrite f l r g) = PRewrite f (en l) (en r) (fmap en g)
     en (PTyped l r) = PTyped (en l) (en r)
-    en (PPair f l r) = PPair f (en l) (en r)
+    en (PPair f p l r) = PPair f p (en l) (en r)
     en (PDPair f l t r) = PDPair f (en l) (en t) (en r)
     en (PAlternative a as) = PAlternative a (map en as)
     en (PHidden t) = PHidden (en t)
@@ -907,7 +947,7 @@ expandParamsD rhsonly ist dec ps ns (PClauses fc opts n cs)
 
     bnames (PRef _ n) = [n]
     bnames (PApp _ _ args) = concatMap bnames (map getTm args)
-    bnames (PPair _ l r) = bnames l ++ bnames r
+    bnames (PPair _ _ l r) = bnames l ++ bnames r
     bnames (PDPair _ l Placeholder r) = bnames l ++ bnames r
     bnames _ = []
 
@@ -963,7 +1003,7 @@ getPriority i tm = 1 -- pri tm
             ((P Ref _ _):_) -> 1
             [] -> 0 -- must be locally bound, if it's not an error...
     pri (PPi _ _ x y) = max 5 (max (pri x) (pri y))
-    pri (PTrue _) = 0
+    pri (PTrue _ _) = 0
     pri (PFalse _) = 0
     pri (PRefl _ _) = 1
     pri (PEq _ l r) = max 1 (max (pri l) (pri r))
@@ -972,7 +1012,7 @@ getPriority i tm = 1 -- pri tm
     pri (PAppBind _ f as) = max 1 (max (pri f) (foldr max 0 (map (pri.getTm) as)))
     pri (PCase _ f as) = max 1 (max (pri f) (foldr max 0 (map (pri.snd) as)))
     pri (PTyped l r) = pri l
-    pri (PPair _ l r) = max 1 (max (pri l) (pri r))
+    pri (PPair _ _ l r) = max 1 (max (pri l) (pri r))
     pri (PDPair _ l t r) = max 1 (max (pri l) (max (pri t) (pri r)))
     pri (PAlternative a as) = maximum (map pri as)
     pri (PConstant _) = 0
@@ -1147,7 +1187,7 @@ implicitise syn ignore ist tm = -- trace ("INCOMING " ++ showImp True tm) $
              put (decls, nub (ns ++ (isn `dropAll` (env ++ map fst (getImps decls)))))
     imps top env (PTyped l r)
         = imps top env l
-    imps top env (PPair _ l r)
+    imps top env (PPair _ _ l r)
         = do (decls, ns) <- get
              let isn = namesIn uvars ist l ++ namesIn uvars ist r
              put (decls, nub (ns ++ (isn `dropAll` (env ++ map fst (getImps decls)))))
@@ -1217,10 +1257,10 @@ addImpl' inpat env infns ist ptm
       = let l' = ai env ds l
             r' = ai env ds r in
             PTyped l' r'
-    ai env ds (PPair fc l r) 
+    ai env ds (PPair fc p l r) 
       = let l' = ai env ds l
             r' = ai env ds r in
-            PPair fc l' r'
+            PPair fc p l' r'
     ai env ds (PDPair fc l t r)
          = let l' = ai env ds l
                t' = ai env ds t
@@ -1420,7 +1460,7 @@ stripUnmatchable i (PApp fc fn args) = PApp fc fn (fmap (fmap su) args) where
        = let alts' = filter (/= Placeholder) (map su alts) in
              if null alts' then Placeholder
                            else PAlternative b alts'
-    su (PPair fc l r) = PPair fc (su l) (su r)
+    su (PPair fc p l r) = PPair fc p (su l) (su r)
     su (PDPair fc l t r) = PDPair fc (su l) (su t) (su r)
     su t = t
 stripUnmatchable i tm = tm
@@ -1529,9 +1569,9 @@ matchClause' names i x y = checkRpts $ match (fullApp x) (fullApp y) where
                                            return (ml ++ mr)
     match (PTyped l r) x = match l x
     match x (PTyped l r) = match x l
-    match (PPair _ l r) (PPair _ l' r') = do ml <- match' l l'
-                                             mr <- match' r r'
-                                             return (ml ++ mr)
+    match (PPair _ _ l r) (PPair _ _ l' r') = do ml <- match' l l'
+                                                 mr <- match' r r'
+                                                 return (ml ++ mr)
     match (PDPair _ l t r) (PDPair _ l' t' r') = do ml <- match' l l'
                                                     mt <- match' t t'
                                                     mr <- match' r r'
@@ -1552,7 +1592,7 @@ matchClause' names i x y = checkRpts $ match (fullApp x) (fullApp y) where
     match (PTactics _) _ = return []
     match (PRefl _ _) (PRefl _ _) = return []
     match (PResolveTC _) (PResolveTC _) = return []
-    match (PTrue _) (PTrue _) = return []
+    match (PTrue _ _) (PTrue _ _) = return []
     match (PFalse _) (PFalse _) = return []
     match (PReturn _) (PReturn _) = return []
     match (PPi _ _ t s) (PPi _ _ t' s') = do mt <- match' t t'
@@ -1612,7 +1652,7 @@ substMatchShadow n shs tm t = sm shs t where
     sm xs (PRewrite f x y tm) = PRewrite f (sm xs x) (sm xs y)
                                            (fmap (sm xs) tm)
     sm xs (PTyped x y) = PTyped (sm xs x) (sm xs y)
-    sm xs (PPair f x y) = PPair f (sm xs x) (sm xs y)
+    sm xs (PPair f p x y) = PPair f p (sm xs x) (sm xs y)
     sm xs (PDPair f x t y) = PDPair f (sm xs x) (sm xs t) (sm xs y)
     sm xs (PAlternative a as) = PAlternative a (map (sm xs) as)
     sm xs (PHidden x) = PHidden (sm xs x)
@@ -1635,7 +1675,7 @@ shadow n n' t = sm t where
     sm (PEq f x y) = PEq f (sm x) (sm y)
     sm (PRewrite f x y tm) = PRewrite f (sm x) (sm y) (fmap sm tm)
     sm (PTyped x y) = PTyped (sm x) (sm y)
-    sm (PPair f x y) = PPair f (sm x) (sm y)
+    sm (PPair f p x y) = PPair f p (sm x) (sm y)
     sm (PDPair f x t y) = PDPair f (sm x) (sm t) (sm y)
     sm (PAlternative a as) = PAlternative a (map sm as)
     sm (PTactics ts) = PTactics (map (fmap sm) ts)
@@ -1657,13 +1697,13 @@ mkUniqueNames env tm = evalState (mkUniq tm) env where
 
   -- FIXME: Probably ought to do this for completeness! It's fine as
   -- long as there are no bindings inside tactics though.
-  mkUniqT tac = return tac 
+  mkUniqT tac = return tac
 
   mkUniq :: PTerm -> State [Name] PTerm
   mkUniq (PLam n ty sc)
          = do env <- get
-              (n', sc') <- 
-                    if n `elem` env 
+              (n', sc') <-
+                    if n `elem` env
                        then do let n' = uniqueName n (env ++ inScope)
                                return (n', shadow n n' sc)
                        else return (n, sc)
@@ -1673,8 +1713,8 @@ mkUniqueNames env tm = evalState (mkUniq tm) env where
               return $! PLam n' ty' sc''
   mkUniq (PPi p n ty sc)
          = do env <- get
-              (n', sc') <- 
-                    if n `elem` env 
+              (n', sc') <-
+                    if n `elem` env
                        then do let n' = uniqueName n (env ++ inScope)
                                return (n', shadow n n' sc)
                        else return (n, sc)
@@ -1684,8 +1724,8 @@ mkUniqueNames env tm = evalState (mkUniq tm) env where
               return $! PPi p n' ty' sc''
   mkUniq (PLet n ty val sc)
          = do env <- get
-              (n', sc') <- 
-                    if n `elem` env 
+              (n', sc') <-
+                    if n `elem` env
                        then do let n' = uniqueName n (env ++ inScope)
                                return (n', shadow n n' sc)
                        else return (n, sc)
@@ -1693,26 +1733,37 @@ mkUniqueNames env tm = evalState (mkUniq tm) env where
               ty' <- mkUniq ty; val' <- mkUniq val
               sc'' <- mkUniq sc'
               return $! PLet n' ty' val' sc''
-  mkUniq (PApp fc t args) 
+  mkUniq (PApp fc t args)
          = do t' <- mkUniq t
               args' <- mapM mkUniqA args
               return $! PApp fc t' args'
-  mkUniq (PAppBind fc t args) 
+  mkUniq (PAppBind fc t args)
          = do t' <- mkUniq t
               args' <- mapM mkUniqA args
               return $! PAppBind fc t' args'
-  mkUniq (PCase fc t alts) 
+  mkUniq (PCase fc t alts)
          = do t' <- mkUniq t
               alts' <- mapM (\(x,y)-> do x' <- mkUniq x; y' <- mkUniq y
                                          return (x', y')) alts
               return $! PCase fc t' alts'
-  mkUniq (PPair fc l r) 
+  mkUniq (PPair fc p l r)
          = do l' <- mkUniq l; r' <- mkUniq r
-              return $! PPair fc l' r'                                                      
-  mkUniq (PDPair fc l t r) 
+              return $! PPair fc p l' r'
+  mkUniq (PDPair fc (PRef fc' n) t sc)
+      | t /= Placeholder
+         = do env <- get
+              (n', sc') <- if n `elem` env
+                              then do let n' = uniqueName n (env ++ inScope)
+                                      return (n', shadow n n' sc)
+                              else return (n, sc)
+              put (n' : env)
+              t' <- mkUniq t
+              sc'' <- mkUniq sc'
+              return $! PDPair fc (PRef fc' n') t' sc''
+  mkUniq (PDPair fc l t r)
          = do l' <- mkUniq l; t' <- mkUniq t; r' <- mkUniq r
-              return $! PDPair fc l' t' r'                                                      
-  mkUniq (PAlternative b as) 
+              return $! PDPair fc l' t' r'
+  mkUniq (PAlternative b as)
          = liftM (PAlternative b) (mapM mkUniq as)
   mkUniq (PHidden t) = liftM PHidden (mkUniq t)
   mkUniq (PUnifyLog t) = liftM PUnifyLog (mkUniq t)
