@@ -22,6 +22,8 @@ import System.Console.Haskeline
 import System.Console.Haskeline.History
 import Control.Monad.State.Strict
 
+import Data.Maybe
+
 import Util.Pretty
 import Debug.Trace
 
@@ -56,6 +58,13 @@ maybeRefine es x = do
   idrisCatch
     (do (_, st) <- elabStep es (runTac True i $ Refine x []); return $ Just st)
     (\err -> return Nothing)
+
+filterIdentifiers :: ElabState [PDecl] -> [Name] -> Idris [(Name, ElabState [PDecl])]
+filterIdentifiers es xs = do
+  fmap catMaybes $ forM xs
+    (\x -> do
+       mes <- maybeRefine es x
+       return $ fmap (\es -> (x, es)) mes)
 
 showProof :: Bool -> Name -> [String] -> String
 showProof lit n ps
