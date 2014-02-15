@@ -50,6 +50,13 @@ maybeIntros es = do
     (do (_, st) <- elabStep es (runTac True i Intros); return st)
     (\err -> return es)
 
+maybeRefine :: ElabState [PDecl] -> Name -> Idris (Maybe (ElabState [PDecl]))
+maybeRefine es x = do
+  i <- getIState
+  idrisCatch
+    (do (_, st) <- elabStep es (runTac True i $ Refine x []); return $ Just st)
+    (\err -> return Nothing)
+
 showProof :: Bool -> Name -> [String] -> String
 showProof lit n ps
     = bird ++ show n ++ " = proof" ++ break ++
