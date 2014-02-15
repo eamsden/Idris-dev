@@ -43,6 +43,13 @@ startMVProof x = do
    mkPS :: Context -> Name -> Type -> Idris (ElabState [PDecl], Type)
    mkPS ctxt n ty = return (ES (initElaborator n ctxt ty, []) "" Nothing, ty)
 
+maybeIntros :: ElabState [PDecl] -> Idris (ElabState [PDecl])
+maybeIntros es = do
+  i <- getIState
+  idrisCatch
+    (do (_, st) <- elabStep es (runTac True i Intros); return st)
+    (\err -> return es)
+
 showProof :: Bool -> Name -> [String] -> String
 showProof lit n ps
     = bird ++ show n ++ " = proof" ++ break ++
