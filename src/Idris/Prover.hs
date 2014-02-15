@@ -22,6 +22,7 @@ import System.Console.Haskeline
 import System.Console.Haskeline.History
 import Control.Monad.State.Strict
 
+import Data.List
 import Data.Maybe
 import qualified Data.Map as M
 
@@ -73,6 +74,12 @@ localIdentifiers es = let OK env = envAtFocus $ proof es
 
 globalIdentifiers :: Idris [Name]
 globalIdentifiers = fmap (map fst . M.toList . definitions) getContext
+
+countNewMetavariables :: ElabState [PDecl] -> Int
+countNewMetavariables es = let ps = proof es
+                               explicit = dontunify ps
+                               open = holes ps
+                           in length $ intersect open explicit
 
 showProof :: Bool -> Name -> [String] -> String
 showProof lit n ps
