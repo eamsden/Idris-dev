@@ -27,13 +27,21 @@ import Debug.Trace
 
 prover :: Bool -> Name -> Idris ()
 prover lit x =
-           do ctxt <- getContext
-              i <- getIState
-              case lookupTy x ctxt of
-                  [t] -> if elem x (map fst (idris_metavars i))
-                               then prove ctxt lit x t
-                               else ifail $ show x ++ " is not a metavariable"
-                  _ -> fail "No such metavariable"
+           do (es, ty) <- startMVProof x
+              prove lit x ty es 
+
+startMVProof :: Name -> Idris (ElabState [PDecl], Type)
+startMVProof x = do
+  ctxt <- getContext
+  i <- getIState
+  case lookupTy x ctxt of
+    [t] -> if elem x (map fst (idris_metavars i))
+             then mkPS ctxt x t
+             else ifail $ show x ++ " is not a metavariable"
+    _ -> fail "No such metavariable"
+  where
+   mkPS :: Context -> Name -> Type -> Idris (ElabState [PDecl], Type)
+   mkPS ctxt n ty = return (ES (initElaborator n ctxt ty, []) "" Nothing, ty)
 
 showProof :: Bool -> Name -> [String] -> String
 showProof lit n ps
@@ -54,11 +62,11 @@ assumptionNames e
         names ((MN _ _, _) : bs) = names bs
         names ((n, _) : bs) = show n : names bs
 
-prove :: Context -> Bool -> Name -> Type -> Idris ()
-prove ctxt lit n ty
-    = do let ps = initElaborator n ctxt ty
-         ideslavePutSExp "start-proof-mode" n
-         (tm, prf) <- ploop True ("-" ++ show n) [] (ES (ps, []) "" Nothing) Nothing
+prove :: Bool -> Name -> Type -> ElabState [PDecl] -> Idris ()
+prove lit n ty es
+    = do ideslavePutSExp "start-proof-mode" n
+         ctxt <- getContext
+         (tm, prf) <- ploop True ("-" ++ show n) [] es Nothing
          iLOG $ "Adding " ++ show tm
          iputStrLn $ showProof lit n prf
          i <- getIState
