@@ -66,6 +66,10 @@ filterIdentifiers es xs = do
        mes <- maybeRefine es x
        return $ fmap (\es -> (x, es)) mes)
 
+localIdentifiers :: ElabState [PDecl] -> [Name]
+localIdentifiers es = let OK env = envAtFocus $ proof es
+                      in map fst env
+
 showProof :: Bool -> Name -> [String] -> String
 showProof lit n ps
     = bird ++ show n ++ " = proof" ++ break ++
