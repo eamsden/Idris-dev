@@ -23,6 +23,7 @@ import System.Console.Haskeline.History
 import Control.Monad.State.Strict
 
 import Data.Maybe
+import qualified Data.Map as M
 
 import Util.Pretty
 import Debug.Trace
@@ -69,6 +70,9 @@ filterIdentifiers es xs = do
 localIdentifiers :: ElabState [PDecl] -> [Name]
 localIdentifiers es = let OK env = envAtFocus $ proof es
                       in map fst env
+
+globalIdentifiers :: Idris [Name]
+globalIdentifiers = fmap (map fst . M.toList . definitions) getContext
 
 showProof :: Bool -> Name -> [String] -> String
 showProof lit n ps
