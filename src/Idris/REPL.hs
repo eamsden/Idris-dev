@@ -35,8 +35,10 @@ import Util.Pretty hiding ((</>))
 
 import Idris.Core.Evaluate
 import Idris.Core.Execute (execute)
+import Idris.Core.Elaborate (proof)
 import Idris.Core.TT
 import Idris.Core.Constraints
+import Idris.Core.ProofState (pterm)
 
 import IRTS.Compiler
 import IRTS.CodegenCommon
@@ -274,6 +276,25 @@ ideslave orig mods
                        process stdout fn (MakeWith False line (sUN name))
                      Just (IdeSlave.ProofSearch line name hints) ->
                        process stdout fn (DoProofSearch False line (sUN name) (map sUN hints))
+                     Just (IdeSlave.CompatibleIdentifiers nm) -> do
+                       mv <- lookupMV nm
+                       (es, _) <- startMVProof mv
+                       es <- maybeIntros es
+                       nms <- fmap (readableNames . (localIdentifiers es ++)) globalIdentifiers
+                       filteredNmsESs <- filterIdentifiers es nms
+                       resetESTable
+                       nms <- forM filteredNmsESs
+                         (\(nm,es) -> do
+                           addESToTable (show nm) es
+                           return nm)
+                       let good = IdeSlave.SexpList [IdeSlave.SymbolAtom "ok", IdeSlave.toSExp nms]
+                       runIO $ putStrLn $ IdeSlave.convSExp "return" good id
+                     Just (IdeSlave.MakeRefinedExpression nm) -> do
+                       i <- getIState
+                       (Just es) <- getESFromTable (show nm)
+                       let idrisTerm = delab i $ pterm $ proof es
+                           good = IdeSlave.SexpList [IdeSlave.SymbolAtom "ok", IdeSlave.StringAtom $ show idrisTerm]
+                       runIO $ putStrLn $ IdeSlave.convSExp "return" good id
                      Nothing -> do iPrintError "did not understand")
                (\e -> do iPrintError $ show e))
          (\e -> do iPrintError $ show e)
