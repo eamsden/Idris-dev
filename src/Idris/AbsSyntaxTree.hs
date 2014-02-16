@@ -151,7 +151,8 @@ data IState = IState {
     idris_nameIdx :: (Int, Ctxt (Int, Name)),
     idris_function_errorhandlers :: Ctxt (M.Map Name (S.Set Name)), -- ^ Specific error handlers
     module_aliases :: M.Map [T.Text] [T.Text],
-    idris_consolewidth :: ConsoleWidth -- ^ How many chars wide is the console?
+    idris_consolewidth :: ConsoleWidth, -- ^ How many chars wide is the console?
+    idris_elabStateTable :: (Integer, M.Map Integer (ElabState [PDecl]))
    }
 
 data SizeChange = Smaller | Same | Bigger | Unknown
@@ -221,7 +222,7 @@ idrisInit = IState initContext [] [] emptyContext emptyContext emptyContext
                    [] [] defaultOpts 6 [] [] [] [] [] [] [] [] [] [] [] [] []
                    [] Nothing Nothing [] [] [] Hidden False [] Nothing [] [] RawOutput
                    True defaultTheme stdout [] (0, emptyContext) emptyContext M.empty
-                   AutomaticWidth
+                   AutomaticWidth (0, M.empty)
 
 -- | The monad for the main REPL - reading and processing files and updating
 -- global state (hence the IO inner monad).
