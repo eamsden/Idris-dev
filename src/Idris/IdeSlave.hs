@@ -150,7 +150,7 @@ sexpToCommand (SexpList [SymbolAtom "proof-search", IntegerAtom line, StringAtom
   where getHints = mapM (\h -> case h of
                                  StringAtom s -> Just s
                                  _            -> Nothing)
-sexpToCommand (SexpList [SymbolAtom "combatible-identifiers", StringAtom name])         = Just (CompatibleIdentifiers name)
+sexpToCommand (SexpList [SymbolAtom "compatible-identifiers", StringAtom name])         = Just (CompatibleIdentifiers name)
 sexpToCommand (SexpList [SymbolAtom "make-refined-expression", StringAtom name])        = Just (MakeRefinedExpression name)
 sexpToCommand _                                                                         = Nothing
 

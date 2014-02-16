@@ -25,6 +25,7 @@ import Idris.Colours
 import Idris.Inliner
 import Idris.CaseSplit
 import Idris.DeepSeq
+import Idris.UnProof
 
 import Paths_idris
 import Version_idris (gitHash)
@@ -291,9 +292,9 @@ ideslave orig mods
                        runIO $ putStrLn $ IdeSlave.convSExp "return" good id
                      Just (IdeSlave.MakeRefinedExpression nm) -> do
                        i <- getIState
-                       (Just es) <- getESFromTable (show nm)
-                       let idrisTerm = delab i $ pterm $ proof es
-                           good = IdeSlave.SexpList [IdeSlave.SymbolAtom "ok", IdeSlave.StringAtom $ show idrisTerm]
+                       (Just es) <- getESFromTable nm
+                       let idrisTerm = unproof $ pterm $ proof es
+                           good = IdeSlave.SexpList [IdeSlave.SymbolAtom "ok", IdeSlave.StringAtom idrisTerm]
                        runIO $ putStrLn $ IdeSlave.convSExp "return" good id
                      Nothing -> do iPrintError "did not understand")
                (\e -> do iPrintError $ show e))
