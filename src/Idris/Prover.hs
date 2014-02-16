@@ -81,6 +81,11 @@ countNewMetavariables es = let ps = proof es
                                open = holes ps
                            in length $ intersect open explicit
 
+readableNames :: [Name] -> [Name]
+readableNames = filter (\n -> case n of
+                                UN _ -> True
+                                _ -> False)
+
 delaboratedProofTerm :: ElabState [PDecl] -> Idris PTerm
 delaboratedProofTerm es = do
   i <- getIState
