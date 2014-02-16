@@ -81,6 +81,11 @@ countNewMetavariables es = let ps = proof es
                                open = holes ps
                            in length $ intersect open explicit
 
+delaboratedProofTerm :: ElabState [PDecl] -> Idris PTerm
+delaboratedProofTerm es = do
+  i <- getIState
+  return $ delabMV i (pterm $ proof es)
+
 showProof :: Bool -> Name -> [String] -> String
 showProof lit n ps
     = bird ++ show n ++ " = proof" ++ break ++
