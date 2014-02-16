@@ -130,6 +130,8 @@ data IdeSlaveCommand = REPLCompletions String
                      | MakeWithBlock Int String
                      | ProofSearch Int String [String]
                      | LoadFile String
+                     | CompatibleIdentifiers String
+                     | MakeRefinedExpression Integer
   deriving Show
 
 sexpToCommand :: SExp -> Maybe IdeSlaveCommand
@@ -144,9 +146,12 @@ sexpToCommand (SexpList [SymbolAtom "add-proof-clause", IntegerAtom line, String
 sexpToCommand (SexpList [SymbolAtom "add-missing", IntegerAtom line, StringAtom name])  = Just (AddMissing (fromInteger line) name)
 sexpToCommand (SexpList [SymbolAtom "make-with", IntegerAtom line, StringAtom name])    = Just (MakeWithBlock (fromInteger line) name)
 sexpToCommand (SexpList [SymbolAtom "proof-search", IntegerAtom line, StringAtom name, SexpList hintexp]) | Just hints <- getHints hintexp = Just (ProofSearch (fromInteger line) name hints)
+
   where getHints = mapM (\h -> case h of
                                  StringAtom s -> Just s
                                  _            -> Nothing)
+sexpToCommand (SexpList [SymbolAtom "combatible-identifiers", StringAtom name])         = Just (CompatibleIdentifiers name)
+sexpToCommand (SexpList [SymbolAtom "make-refined-expression", IntegerAtom idx])        = Just (MakeRefinedExpression idx)
 sexpToCommand _                                                                         = Nothing
 
 parseMessage :: String -> Either Err (SExp, Integer)
