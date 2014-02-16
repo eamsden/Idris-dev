@@ -206,6 +206,18 @@ ideslaveStart orig mods
        ideslave orig mods
 
 
+lookupMV :: String -> Idris Name
+lookupMV nm = do cxt <- getContext
+                 ist <- getIState
+                 let ns = lookupNames (sUN nm) cxt
+                     metavars = mapMaybe (\n -> do c <- lookup n (idris_metavars ist)
+                                                   return (n, c)) ns
+                 case metavars of
+                   [] -> ierror (Msg $ "Cannot find metavariable " ++ nm)
+                   [(n, (_,_,False))] -> return n
+                   [(_, (_,_,True))] -> ierror (Msg $ "Declarations not solvable using prover")
+
+
 ideslave :: IState -> [FilePath] -> Idris ()
 ideslave orig mods
   = do idrisCatch
