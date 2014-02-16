@@ -495,23 +495,22 @@ renderWidth = do iw <- getWidth
                    ColsWide n -> return (max n 1)
                    AutomaticWidth -> runIO getScreenWidth
 
-addESToTable :: ElabState [PDecl] -> Idris Integer
-addESToTable es = do
+addESToTable :: String -> ElabState [PDecl] -> Idris ()
+addESToTable nm es = do
   i <- getIState
-  let (next, table) = idris_elabStateTable i
-  put i { idris_elabStateTable = (next + 1, M.insert next es table) }
-  return next
+  let table = idris_elabStateTable i
+  put i { idris_elabStateTable = M.insert nm es table }
 
-getESFromTable :: Integer -> Idris (Maybe (ElabState [PDecl]))
-getESFromTable idx = do
+getESFromTable :: String -> Idris (Maybe (ElabState [PDecl]))
+getESFromTable nm = do
   i <- getIState
-  let (_, table) = idris_elabStateTable i
-  return $ M.lookup idx table
+  let table = idris_elabStateTable i
+  return $ M.lookup nm table
 
 resetESTable :: Idris ()
 resetESTable = do
   i <- getIState
-  put i { idris_elabStateTable = (0, M.empty) }
+  put i { idris_elabStateTable = M.empty }
 
 iRender :: Doc a -> Idris (SimpleDoc a)
 iRender d = do w <- getWidth
