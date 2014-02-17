@@ -68,6 +68,11 @@ filterIdentifiers es xs = do
        mes <- maybeRefine es x
        return $ fmap (\es -> (x, es)) mes)
 
+overFilterIdentifiers :: ElabState [PDecl] -> [Name] -> Idris [(Name, ElabState [PDecl])]
+overFilterIdentifiers es xs = fmap (filter (\(_,es) -> let p = proof es
+                                                       in null $ holes p \\ dontunify p))
+                              $ filterIdentifiers es xs
+
 localIdentifiers :: ElabState [PDecl] -> [Name]
 localIdentifiers es = let OK env = envAtFocus $ proof es
                       in map fst env
