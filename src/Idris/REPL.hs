@@ -290,6 +290,19 @@ ideslave orig mods
                            return nm)
                        let good = IdeSlave.SexpList [IdeSlave.SymbolAtom "ok", IdeSlave.toSExp nms]
                        runIO $ putStrLn $ IdeSlave.convSExp "return" good id
+                     Just (IdeSlave.CompleteCompatibleIdentifiers nm) -> do
+                       mv <- lookupMV nm
+                       (es, _) <- startMVProof mv
+                       es <- maybeIntros es
+                       nms <- fmap (readableNames . (localIdentifiers es ++)) globalIdentifiers
+                       filteredNmsESs <- overFilterIdentifiers es nms
+                       resetESTable
+                       nms <- forM filteredNmsESs
+                         (\(nm,es) -> do
+                           addESToTable (show nm) es
+                           return nm)
+                       let good = IdeSlave.SexpList [IdeSlave.SymbolAtom "ok", IdeSlave.toSExp nms]
+                       runIO $ putStrLn $ IdeSlave.convSExp "return" good id
                      Just (IdeSlave.MakeRefinedExpression nm) -> do
                        i <- getIState
                        (Just es) <- getESFromTable nm
