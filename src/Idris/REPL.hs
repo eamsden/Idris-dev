@@ -39,7 +39,7 @@ import Idris.Core.Execute (execute)
 import Idris.Core.Elaborate (proof)
 import Idris.Core.TT
 import Idris.Core.Constraints
-import Idris.Core.ProofState (pterm)
+import Idris.Core.ProofState (pterm,holes,dontunify)
 
 import IRTS.Compiler
 import IRTS.CodegenCommon
@@ -304,11 +304,40 @@ ideslave orig mods
                        let good = IdeSlave.SexpList [IdeSlave.SymbolAtom "ok", IdeSlave.toSExp nms]
                        runIO $ putStrLn $ IdeSlave.convSExp "return" good id
                      Just (IdeSlave.MakeRefinedExpression nm) -> do
-                       i <- getIState
                        (Just es) <- getESFromTable nm
                        let idrisTerm = unproof $ pterm $ proof es
                            good = IdeSlave.SexpList [IdeSlave.SymbolAtom "ok", IdeSlave.StringAtom idrisTerm]
                        runIO $ putStrLn $ IdeSlave.convSExp "return" good id
+                     Just (IdeSlave.CompatibleIdentifiersRecursive nm) -> do
+                       mv <- lookupMV nm
+                       (es, _) <- startMVProof mv
+                       es <- maybeIntros es
+                       nms <- fmap (readableNames . (localIdentifiers es ++)) globalIdentifiers
+                       filteredNmsESs <- filterIdentifiers es nms
+                       resetESTable
+                       nms <- forM filteredNmsESs
+                         (\(nm,es) -> do
+                           addESToTable (show nm) es
+                           return nm)
+                       let good = IdeSlave.SexpList [IdeSlave.SymbolAtom "ok", IdeSlave.SexpList [IdeSlave.SymbolAtom "identifier-list", IdeSlave.toSExp nms]]
+                       runIO $ putStrLn $ IdeSlave.convSExp "return" good id
+                     Just (IdeSlave.ChooseIdentifier nm) -> do
+                       (Just es) <- getESFromTable nm
+                       let p = proof es
+                       if null $ holes p \\ dontunify p
+                          then let idrisTerm = unproof $ pterm $ proof es
+                                   good = IdeSlave.SexpList [IdeSlave.SymbolAtom "ok", IdeSlave.SexpList [IdeSlave.SymbolAtom "complete-term", IdeSlave.StringAtom idrisTerm]]
+                               in runIO $ putStrLn $ IdeSlave.convSExp "return" good id
+                          else do
+                            nms <- fmap (readableNames . (localIdentifiers es ++)) globalIdentifiers
+                            filteredNmsESs <- filterIdentifiers es nms
+                            resetESTable
+                            nms <- forM filteredNmsESs
+                              (\(nm,es) -> do
+                                addESToTable (show nm) es
+                                return nm)
+                            let good = IdeSlave.SexpList [IdeSlave.SymbolAtom "ok", IdeSlave.SexpList [IdeSlave.SymbolAtom "identifier-list", IdeSlave.toSExp nms]]
+                            runIO $ putStrLn $ IdeSlave.convSExp "return" good id
                      Nothing -> do iPrintError "did not understand")
                (\e -> do iPrintError $ show e))
          (\e -> do iPrintError $ show e)

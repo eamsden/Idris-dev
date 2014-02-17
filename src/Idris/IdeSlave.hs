@@ -133,6 +133,8 @@ data IdeSlaveCommand = REPLCompletions String
                      | CompatibleIdentifiers String
                      | CompleteCompatibleIdentifiers String
                      | MakeRefinedExpression String
+                     | CompatibleIdentifiersRecursive String
+                     | ChooseIdentifier String
   deriving Show
 
 sexpToCommand :: SExp -> Maybe IdeSlaveCommand
@@ -154,6 +156,8 @@ sexpToCommand (SexpList [SymbolAtom "proof-search", IntegerAtom line, StringAtom
 sexpToCommand (SexpList [SymbolAtom "compatible-identifiers", StringAtom name])         = Just (CompatibleIdentifiers name)
 sexpToCommand (SexpList [SymbolAtom "complete-compatible-identifiers", StringAtom name]) = Just (CompleteCompatibleIdentifiers name)
 sexpToCommand (SexpList [SymbolAtom "make-refined-expression", StringAtom name])        = Just (MakeRefinedExpression name)
+sexpToCommand (SexpList [SymbolAtom "compatible-identifiers-recursive", StringAtom name]) = Just (CompatibleIdentifiersRecursive name)
+sexpToCommand (SexpList [SymbolAtom "choose-identifier", StringAtom name])              = Just (ChooseIdentifier name)
 sexpToCommand _                                                                         = Nothing
 
 parseMessage :: String -> Either Err (SExp, Integer)
