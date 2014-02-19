@@ -25,7 +25,6 @@ import Idris.Colours
 import Idris.Inliner
 import Idris.CaseSplit
 import Idris.DeepSeq
-import Idris.UnProof
 
 import Paths_idris
 import Version_idris (gitHash)
@@ -306,7 +305,7 @@ ideslave orig mods
                      Just (IdeSlave.MakeRefinedExpression nm) -> do
                        (Just es) <- getESFromTable nm
                        ist <- getIState
-                       let idrisTerm = show $ delabProofTerm (thname $ proof es) ist (pterm $ proof es)
+                       let idrisTerm = "(" ++ (show $ delabProofTerm (thname $ proof es) ist (pterm $ proof es)) ++ ")"
                            good = IdeSlave.SexpList [IdeSlave.SymbolAtom "ok", IdeSlave.StringAtom idrisTerm]
                        runIO $ putStrLn $ IdeSlave.convSExp "return" good id
                      Just (IdeSlave.CompatibleIdentifiersRecursive nm) -> do
@@ -327,7 +326,7 @@ ideslave orig mods
                        ist <- getIState
                        let p = proof es
                        if null $ holes p \\ dontunify p
-                          then let idrisTerm = show $ delabProofTerm (thname $ proof es) ist (pterm $ proof es)
+                          then let idrisTerm = "(" ++ (show $ delabProofTerm (thname $ proof es) ist (pterm $ proof es)) ++ ")"
                                    good = IdeSlave.SexpList [IdeSlave.SymbolAtom "ok", IdeSlave.SexpList [IdeSlave.SymbolAtom "complete-term", IdeSlave.StringAtom idrisTerm]]
                                in runIO $ putStrLn $ IdeSlave.convSExp "return" good id
                           else do

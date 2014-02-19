@@ -75,7 +75,7 @@ delabTy' ist imps tm fullname mvs pt lct = de lct [] imps tm
     de c env _ (Bind n (Let ty val) sc)
             = PLet n (de c env [] ty) (de c env [] val) (de c ((n,n):env) [] sc)
     de c env _ (Bind n (Hole ty) sc)
-            | pt = de c ((n, sUN "?fooBar"):env) [] sc
+            | pt = de c ((n, sUN $ "?" ++ holeName n):env) [] sc
             | otherwise = de c ((n, sUN "[__]"):env) [] sc
     de c env _ (Bind n (Guess ty val) sc)
             | pt = de c env [] val
@@ -128,6 +128,9 @@ delabTy' ist imps tm fullname mvs pt lct = de lct [] imps tm
     imp (PExp p l _ d)   arg = PExp p l arg d
     imp (PConstraint p l _ d) arg = PConstraint p l arg d
     imp (PTacImplicit p l n sc _ d) arg = PTacImplicit p l n sc arg d
+
+    holeName :: Name -> String
+    holeName n = filter (`notElem` "{_}") $ show n
 
 -- | How far to indent sub-errors
 errorIndent :: Int
