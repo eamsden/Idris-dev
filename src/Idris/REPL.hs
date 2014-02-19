@@ -326,7 +326,7 @@ ideslave orig mods
                        ist <- getIState
                        cxt <- getContext
                        let p = proof es
-                       if willIncomplete $ pterm p
+                       if not $ willIncomplete $ pterm p
                          then let idrisTerm = "(" ++ (show $ delabProofTerm (thname $ proof es) ist (pterm $ proof es)) ++ ")"
                                   good = IdeSlave.SexpList [IdeSlave.SymbolAtom "ok", IdeSlave.SexpList [IdeSlave.SymbolAtom "complete-term", IdeSlave.StringAtom idrisTerm]]
                               in runIO $ putStrLn $ IdeSlave.convSExp "return" good id
