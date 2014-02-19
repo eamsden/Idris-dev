@@ -1,6 +1,6 @@
 {-# LANGUAGE PatternGuards #-}
 
-module Idris.Delaborate (bugaddr, delab, delab', delabMV, delabTy, delabTy', delabProofTerm, pshow, pprintErr) where
+module Idris.Delaborate (bugaddr, delab, delab', delabMV, delabTy, delabTy', delabProofTerm, willIncomplete, pshow, pprintErr) where
 
 -- Convert core TT back into high level syntax, primarily for display
 -- purposes.
@@ -131,6 +131,37 @@ delabTy' ist imps tm fullname mvs pt lct = de lct [] imps tm
 
     holeName :: Name -> String
     holeName n = filter (`notElem` "{_}") $ show n
+
+willIncomplete :: Term -> Bool
+willIncomplete t = willIncomplete' False [] t
+  where
+    willIncomplete' :: Bool -> [(Name,Bool)] -> Term -> Bool
+    willIncomplete' tyCtx env (P _ n ty)
+                      | (willIncomplete' True env ty) = True
+                      | tyCtx = lookup n env == Just True
+                      | otherwise = False
+    willIncomplete' tyCtx env (V i)
+                      | tyCtx = (snd $ env !! i)
+                      | otherwise = False
+    willIncomplete' tyCtx env (Bind n b t) =
+      case b of
+        Lam ty -> willIncomplete' True env ty || willIncomplete' tyCtx ((n,False):env) t
+        Pi ty -> willIncomplete' True env ty || willIncomplete' tyCtx ((n,False):env) t
+        Let ty val -> willIncomplete' True env ty || willIncomplete' tyCtx env val || willIncomplete' tyCtx ((n,False):env) t
+        NLet ty val -> willIncomplete' True env ty || willIncomplete' tyCtx env val || willIncomplete' tyCtx ((n,False):env) t
+        Hole ty -> willIncomplete' True env ty || willIncomplete' tyCtx ((n,True):env) t
+        GHole _ ty -> willIncomplete' True env ty || willIncomplete' tyCtx ((n,True):env) t
+        Guess ty val -> willIncomplete' True env ty || willIncomplete' tyCtx env val || willIncomplete' tyCtx ((n,True):env) t
+        PVar ty -> willIncomplete' True env ty || willIncomplete' tyCtx ((n,False):env) t
+        PVTy ty -> willIncomplete' True env ty || willIncomplete' tyCtx ((n,False):env) t
+
+
+    willIncomplete' tyCtx env (App f n) = willIncomplete' tyCtx env f || willIncomplete' tyCtx env n
+    willIncomplete' tyCtx env (Constant _) = False
+    willIncomplete' tyCtx env (Proj _ _) = False
+    willIncomplete' tyCtx env Erased = False
+    willIncomplete' tyCtx env Impossible = False
+    willIncomplete' tyCtx env (TType _) = False
 
 -- | How far to indent sub-errors
 errorIndent :: Int

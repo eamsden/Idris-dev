@@ -324,12 +324,13 @@ ideslave orig mods
                      Just (IdeSlave.ChooseIdentifier nm) -> do
                        (Just es) <- getESFromTable nm
                        ist <- getIState
+                       cxt <- getContext
                        let p = proof es
-                       if null $ holes p \\ dontunify p
-                          then let idrisTerm = "(" ++ (show $ delabProofTerm (thname $ proof es) ist (pterm $ proof es)) ++ ")"
-                                   good = IdeSlave.SexpList [IdeSlave.SymbolAtom "ok", IdeSlave.SexpList [IdeSlave.SymbolAtom "complete-term", IdeSlave.StringAtom idrisTerm]]
-                               in runIO $ putStrLn $ IdeSlave.convSExp "return" good id
-                          else do
+                       if willIncomplete $ pterm p
+                         then let idrisTerm = "(" ++ (show $ delabProofTerm (thname $ proof es) ist (pterm $ proof es)) ++ ")"
+                                  good = IdeSlave.SexpList [IdeSlave.SymbolAtom "ok", IdeSlave.SexpList [IdeSlave.SymbolAtom "complete-term", IdeSlave.StringAtom idrisTerm]]
+                              in runIO $ putStrLn $ IdeSlave.convSExp "return" good id
+                         else do
                             nms <- fmap (readableNames . (localIdentifiers es ++)) globalIdentifiers
                             filteredNmsESs <- filterIdentifiers es nms
                             resetESTable
