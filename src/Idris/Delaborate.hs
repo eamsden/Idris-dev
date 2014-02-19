@@ -1,6 +1,6 @@
 {-# LANGUAGE PatternGuards #-}
 
-module Idris.Delaborate (bugaddr, delab, delab', delabMV, delabTy, delabTy', pshow, pprintErr) where
+module Idris.Delaborate (bugaddr, delab, delab', delabMV, delabTy, delabTy', delabProofTerm, pshow, pprintErr) where
 
 -- Convert core TT back into high level syntax, primarily for display
 -- purposes.
@@ -19,60 +19,72 @@ import Debug.Trace
 bugaddr = "https://github.com/idris-lang/Idris-dev/issues"
 
 delab :: IState -> Term -> PTerm
-delab i tm = delab' i tm False False
+delab i tm = delab' i tm False False False 0
 
 delabMV :: IState -> Term -> PTerm
-delabMV i tm = delab' i tm False True
+delabMV i tm = delab' i tm False True False 0
+
+delabProofTerm :: Name -> IState -> Term -> PTerm
+delabProofTerm n i tm =
+  let (Just (_,localCt,_)) = lookup n $ idris_metavars i
+  in delab' i tm False False True localCt 
 
 delabTy :: IState -> Name -> PTerm
 delabTy i n
     = case lookupTy n (tt_ctxt i) of
            (ty:_) -> case lookupCtxt n (idris_implicits i) of
-                         (imps:_) -> delabTy' i imps ty False False
-                         _ -> delabTy' i [] ty False False
+                         (imps:_) -> delabTy' i imps ty False False False 0
+                         _ -> delabTy' i [] ty False False False 0
 
-delab' :: IState -> Term -> Bool -> Bool -> PTerm
-delab' i t f mvs = delabTy' i [] t f mvs
+delab' :: IState -> Term -> Bool -> Bool -> Bool -> Int -> PTerm
+delab' i t f mvs pt lct = delabTy' i [] t f mvs pt lct
 
 delabTy' :: IState -> [PArg] -- ^ implicit arguments to type, if any
           -> Term
           -> Bool -- ^ use full names
           -> Bool -- ^ Don't treat metavariables specially
+          -> Bool -- ^ Replace holes with generated metavariables
+          -> Int  -- ^ Number of lambdas to strip from the outside of the expression
           -> PTerm
-delabTy' ist imps tm fullname mvs = de [] imps tm
+delabTy' ist imps tm fullname mvs pt lct = de lct [] imps tm
   where
     un = fileFC "(val)"
 
-    de env _ (App f a) = deFn env f [a]
-    de env _ (V i)     | i < length env = PRef un (snd (env!!i))
-                       | otherwise = PRef un (sUN ("v" ++ show i ++ ""))
-    de env _ (P _ n _) | n == unitTy = PTrue un IsType
-                       | n == unitCon = PTrue un IsTerm
-                       | n == falseTy = PFalse un
-                       | Just n' <- lookup n env = PRef un n'
-                       | otherwise
-                            = case lookup n (idris_metavars ist) of
-                                  Just (Just _, mi, _) -> mkMVApp n []
-                                  _ -> PRef un n
-    de env _ (Bind n (Lam ty) sc)
-          = PLam n (de env [] ty) (de ((n,n):env) [] sc)
-    de env (PImp _ _ _ _ _ _:is) (Bind n (Pi ty) sc)
-          = PPi impl n (de env [] ty) (de ((n,n):env) is sc)
-    de env (PConstraint _ _ _ _:is) (Bind n (Pi ty) sc)
-          = PPi constraint n (de env [] ty) (de ((n,n):env) is sc)
-    de env (PTacImplicit _ _ _ tac _ _:is) (Bind n (Pi ty) sc)
-          = PPi (tacimpl tac) n (de env [] ty) (de ((n,n):env) is sc)
-    de env _ (Bind n (Pi ty) sc)
-          = PPi expl n (de env [] ty) (de ((n,n):env) [] sc)
-    de env _ (Bind n (Let ty val) sc)
-        = PLet n (de env [] ty) (de env [] val) (de ((n,n):env) [] sc)
-    de env _ (Bind n (Hole ty) sc) = de ((n, sUN "[__]"):env) [] sc
-    de env _ (Bind n (Guess ty val) sc) = de ((n, sUN "[__]"):env) [] sc
-    de env _ (Bind n _ sc) = de ((n,n):env) [] sc
-    de env _ (Constant i) = PConstant i
-    de env _ Erased = Placeholder
-    de env _ Impossible = Placeholder
-    de env _ (TType i) = PType
+    de c env _ (App f a) = deFn c env f [a]
+    de _ env _ (V i)     | i < length env = PRef un (snd (env!!i))
+                         | otherwise = PRef un (sUN ("v" ++ show i ++ ""))
+    de _ env _ (P _ n _) | n == unitTy = PTrue un IsType
+                         | n == unitCon = PTrue un IsTerm
+                         | n == falseTy = PFalse un
+                         | Just n' <- lookup n env = PRef un n'
+                         | otherwise
+                              = case lookup n (idris_metavars ist) of
+                                    Just (Just _, mi, _) -> mkMVApp n []
+                                    _ -> PRef un n
+    de c env _ (Bind n (Lam ty) sc)
+            | c == 0 = PLam n (de 0 env [] ty) (de 0 ((n,n):env) [] sc)
+            | otherwise = (de (c - 1) ((n,n):env) [] sc)
+    de c env (PImp _ _ _ _ _ _:is) (Bind n (Pi ty) sc)
+            = PPi impl n (de c env [] ty) (de c ((n,n):env) is sc)
+    de c env (PConstraint _ _ _ _:is) (Bind n (Pi ty) sc)
+            = PPi constraint n (de c env [] ty) (de c ((n,n):env) is sc)
+    de c env (PTacImplicit _ _ _ tac _ _:is) (Bind n (Pi ty) sc)
+            = PPi (tacimpl tac) n (de c env [] ty) (de c ((n,n):env) is sc)
+    de c env _ (Bind n (Pi ty) sc)
+            = PPi expl n (de c env [] ty) (de c ((n,n):env) [] sc)
+    de c env _ (Bind n (Let ty val) sc)
+            = PLet n (de c env [] ty) (de c env [] val) (de c ((n,n):env) [] sc)
+    de c env _ (Bind n (Hole ty) sc)
+            | pt = de c ((n, sUN "?fooBar"):env) [] sc
+            | otherwise = de c ((n, sUN "[__]"):env) [] sc
+    de c env _ (Bind n (Guess ty val) sc)
+            | pt = de c env [] val
+            | otherwise = de c ((n, sUN "[__]"):env) [] sc
+    de c env _ (Bind n _ sc) = de c ((n,n):env) [] sc
+    de _ env _ (Constant i) = PConstant i
+    de _ env _ Erased = Placeholder
+    de _ env _ Impossible = Placeholder
+    de _ env _ (TType i) = PType
 
     dens x | fullname = x
     dens ns@(NS n _) = case lookupCtxt n (idris_implicits ist) of
@@ -81,27 +93,27 @@ delabTy' ist imps tm fullname mvs = de [] imps tm
                               _ -> ns
     dens n = n
 
-    deFn env (App f a) args = deFn env f (a:args)
-    deFn env (P _ n _) [l,r]
-         | n == pairTy    = PPair un IsType (de env [] l) (de env [] r)
-         | n == eqCon     = PRefl un (de env [] r)
-         | n == sUN "lazy" = de env [] r
-    deFn env (P _ n _) [ty, Bind x (Lam _) r]
-         | n == sUN "Exists"
-               = PDPair un IsType (PRef un x) (de env [] ty)
-                           (de ((x,x):env) [] (instantiate (P Bound x ty) r))
-    deFn env (P _ n _) [_,_,l,r]
-         | n == pairCon = PPair un IsTerm (de env [] l) (de env [] r)
-         | n == eqTy    = PEq un (de env [] l) (de env [] r)
-         | n == sUN "Ex_intro" = PDPair un IsTerm (de env [] l) Placeholder
-                                           (de env [] r)
-    deFn env (P _ n _) args | not mvs
-         = case lookup n (idris_metavars ist) of
-                Just (Just _, mi, _) ->
-                     mkMVApp n (drop mi (map (de env []) args))
-                _ -> mkPApp n (map (de env []) args)
-         | otherwise = mkPApp n (map (de env []) args)
-    deFn env f args = PApp un (de env [] f) (map pexp (map (de env []) args))
+    deFn c env (App f a) args = deFn c env f (a:args)
+    deFn c env (P _ n _) [l,r]
+           | n == pairTy    = PPair un IsType (de c env [] l) (de c env [] r)
+           | n == eqCon     = PRefl un (de c env [] r)
+           | n == sUN "lazy" = de c env [] r
+    deFn c env (P _ n _) [ty, Bind x (Lam _) r]
+           | n == sUN "Exists"
+                 = PDPair un IsType (PRef un x) (de c env [] ty)
+                             (de c ((x,x):env) [] (instantiate (P Bound x ty) r))
+    deFn c env (P _ n _) [_,_,l,r]
+           | n == pairCon = PPair un IsTerm (de c env [] l) (de c env [] r)
+           | n == eqTy    = PEq un (de c env [] l) (de c env [] r)
+           | n == sUN "Ex_intro" = PDPair un IsTerm (de c env [] l) Placeholder
+                                             (de c env [] r)
+    deFn c env (P _ n _) args | not mvs
+           = case lookup n (idris_metavars ist) of
+                  Just (Just _, mi, _) ->
+                       mkMVApp n (drop mi (map (de c env []) args))
+                  _ -> mkPApp n (map (de c env []) args)
+           | otherwise = mkPApp n (map (de c env []) args)
+    deFn c env f args = PApp un (de c env [] f) (map pexp (map (de c env []) args))
 
     mkMVApp n []
             = PMetavar n

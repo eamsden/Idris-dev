@@ -1060,7 +1060,7 @@ elabClauses info fc opts n_in cs = let n = liftname info n_in in
                [] -> return ()
            return ()
   where
-    noMatch i cs tm = all (\x -> case matchClause i (delab' i x True True) tm of
+    noMatch i cs tm = all (\x -> case matchClause i (delab' i x True True False 0) tm of
                                       Right _ -> False
                                       Left miss -> True) cs
 
@@ -1394,7 +1394,7 @@ elabClause info opts (cnum, PClause fc fname lhs_in withs rhs_in whereblock)
             OK _ -> return ()
             Error e -> ierror (At fc (CantUnify False clhsty crhsty e [] 0))
         i <- getIState
-        checkInferred fc (delab' i crhs True True) rhs
+        checkInferred fc (delab' i crhs True True False 0) rhs
         -- if the function is declared '%error_reverse', or its type,
         -- then we'll try running it in reverse to improve error messages
         let (ret_fam, _) = unApply (getRetTy crhsty)

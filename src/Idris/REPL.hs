@@ -39,7 +39,7 @@ import Idris.Core.Execute (execute)
 import Idris.Core.Elaborate (proof)
 import Idris.Core.TT
 import Idris.Core.Constraints
-import Idris.Core.ProofState (pterm,holes,dontunify)
+import Idris.Core.ProofState (pterm,holes,dontunify,thname)
 
 import IRTS.Compiler
 import IRTS.CodegenCommon
@@ -305,7 +305,8 @@ ideslave orig mods
                        runIO $ putStrLn $ IdeSlave.convSExp "return" good id
                      Just (IdeSlave.MakeRefinedExpression nm) -> do
                        (Just es) <- getESFromTable nm
-                       let idrisTerm = unproof $ pterm $ proof es
+                       ist <- getIState
+                       let idrisTerm = show $ delabProofTerm (thname $ proof es) ist (pterm $ proof es)
                            good = IdeSlave.SexpList [IdeSlave.SymbolAtom "ok", IdeSlave.StringAtom idrisTerm]
                        runIO $ putStrLn $ IdeSlave.convSExp "return" good id
                      Just (IdeSlave.CompatibleIdentifiersRecursive nm) -> do
@@ -323,9 +324,10 @@ ideslave orig mods
                        runIO $ putStrLn $ IdeSlave.convSExp "return" good id
                      Just (IdeSlave.ChooseIdentifier nm) -> do
                        (Just es) <- getESFromTable nm
+                       ist <- getIState
                        let p = proof es
                        if null $ holes p \\ dontunify p
-                          then let idrisTerm = unproof $ pterm $ proof es
+                          then let idrisTerm = show $ delabProofTerm (thname $ proof es) ist (pterm $ proof es)
                                    good = IdeSlave.SexpList [IdeSlave.SymbolAtom "ok", IdeSlave.SexpList [IdeSlave.SymbolAtom "complete-term", IdeSlave.StringAtom idrisTerm]]
                                in runIO $ putStrLn $ IdeSlave.convSExp "return" good id
                           else do
