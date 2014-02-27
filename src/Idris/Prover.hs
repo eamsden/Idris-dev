@@ -70,7 +70,7 @@ filterIdentifiers es xs = do
 
 overFilterIdentifiers :: ElabState [PDecl] -> [Name] -> Idris [(Name, ElabState [PDecl])]
 overFilterIdentifiers es xs = fmap (filter (\(_,es) -> let p = proof es
-                                                       in null $ holes p \\ dontunify p))
+                                                       in not $ willIncomplete $ pterm p))
                               $ filterIdentifiers es xs
 
 localIdentifiers :: ElabState [PDecl] -> [Name]
